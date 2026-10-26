@@ -1,0 +1,23 @@
+content_language: "en"
+
+models:
+  heavy: "claude-sonnet-5-5"
+  light: "claude-haiku-5-5"
+
+costs:
+  budget_monthly_idr: 100000
+  budget_per_video_idr: 5000
+  usd_to_idr: 15500
+
+verification:
+  min_verified_claims: 3
+  quote_similarity_threshold: 0.92
+
+topic_queue:
+  min_queue_size: 10
+  min_footage_candidates: 3
+
+speech:
+  words_per_second: 2.6
+  target_duration_min: 35
+  target_duration_max: 55

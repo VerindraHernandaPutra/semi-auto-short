@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shorts Engine Dashboard - Full Web Control</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-8">
+    <div class="max-w-4xl mx-auto">
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">🎬 Shorts Engine Web</h1>
+            
+            <div class="flex items-center gap-4">
+                <!-- Dropdown Pengaturan AI -->
+                <div class="flex flex-col">
+                    <label class="text-xs text-gray-500 font-bold mb-1">LLM Provider (Penulis):</label>
+                    <select id="llmProvider" onchange="updateProviders()" class="border rounded px-2 py-1 text-sm bg-white">
+                        <option value="mock">Mock (Tiruan/Gratis)</option>
+                        <option value="ollama">Ollama (Lokal/Gratis)</option>
+                        <option value="anthropic">Claude (Berbayar API)</option>
+                    </select>
+                </div>
+                
+                <div class="flex flex-col">
+                    <label class="text-xs text-gray-500 font-bold mb-1">Search Provider (Riset):</label>
+                    <select id="searchProvider" onchange="updateProviders()" class="border rounded px-2 py-1 text-sm bg-white">
+                        <option value="mock">Mock (Tiruan/Gratis)</option>
+                        <option value="tavily">Tavily (Berbayar API)</option>
+                    </select>
+                </div>
+
+                <!-- Tombol Produce Naskah -->
+                <button onclick="produceNewScript()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-6 rounded shadow transition-colors ml-4 mt-4">
+                    ✨ Generate New Script
+                </button>
+            </div>
+        </div>
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">🎬 Shorts Engine Web</h1>
+            
+            <!-- Tombol Produce Naskah -->
+            <button onclick="produceNewScript()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-6 rounded shadow transition-colors">
+                ✨ Generate New Script
+            </button>
+        </div>
+        
+        <div class="bg-white rounded-lg shadow p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-semibold text-gray-700">Pekerjaan Saat Ini</h2>
+                <button onclick="fetchJobs()" class="text-sm text-gray-500 hover:text-gray-800">🔄 Refresh</button>
+            </div>
+            
+            <div id="jobsList" class="space-y-4">
+                <p class="text-gray-500">Memuat data...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal/Popup untuk Nonton Video -->
+    <div id="videoModal" class="fixed inset-0 bg-black bg-opacity-75 hidden flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-lg max-w-sm w-full p-4 relative">
+            <button onclick="closeModal()" class="absolute top-2 right-2 text-gray-500 hover:text-gray-800 text-xl font-bold">&times;</button>
+            <h3 class="text-lg font-semibold mb-4" id="modalTitle">Video Preview</h3>
+            
+            <div class="aspect-[9/16] bg-black mb-4 rounded overflow-hidden">
+                <video id="videoPlayer" class="w-full h-full object-cover" controls>
+                    <source src="" type="video/mp4">
+                </video>
+            </div>
+            
+            <button id="approveBtn" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded transition-colors hidden">
+                ✅ Approve Video
+            </button>
+        </div>
+    </div>
+
+    <script>
+        async function loadProviders() {
+            try {
+                const response = await fetch('/api/settings/providers');
+                const data = await response.json();
+                document.getElementById('llmProvider').value = data.llm;
+                document.getElementById('searchProvider').value = data.search;
+            } catch(e) { console.error("Gagal memuat provider", e); }
+        }
+
+        async function updateProviders() {
+            const llm = document.getElementById('llmProvider').value;
+            const search = document.getElementById('searchProvider').value;
+            try {
+                await fetch('/api/settings/providers', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({llm, search})
+                });
+                console.log("Provider berhasil diubah!");
+            } catch(e) { alert("Gagal mengubah provider."); }
+        }
+
+        // Memicu pembuatan AI di belakang layar
+        async function produceNewScript() {
+            if(!confirm("Minta AI membuat riset dan naskah baru sekarang?")) return;
+            try {
+                await fetch('/api/produce', { method: 'POST' });
+                alert("Proses dimulai! Tunggu sekitar 15-30 detik lalu klik Refresh.");
+            } catch(e) { alert("Gagal menyambung ke server."); }
+        }
+
+        async function fetchJobs() {
+            try {
+                const response = await fetch('/api/jobs');
+                const jobs = await response.json();
+                
+                const container = document.getElementById('jobsList');
+                container.innerHTML = '';
+                
+                if (jobs.length === 0) {
+                    container.innerHTML = '<p class="text-gray-500">Belum ada job. Klik "Generate New Script" di atas.</p>';
+                    return;
+                }
+                
+                jobs.forEach(job => {
+                    const isPending = job.status === 'pending_review';
+                    const isAwaitingVoice = job.status === 'awaiting_voice';
+                    const isFailed = job.status === 'failed';
+                    
+                    let statusColor = 'bg-gray-100 text-gray-800';
+                    if (isPending) statusColor = 'bg-yellow-100 text-yellow-800';
+                    else if (isAwaitingVoice) statusColor = 'bg-purple-100 text-purple-800';
+                    else if (isFailed) statusColor = 'bg-red-100 text-red-800';
+                    else if (job.status === 'approved') statusColor = 'bg-green-100 text-green-800';
+
+                    // Tombol Dinamis Tergantung Status
+                    let actionButton = '';
+                    if(isPending || job.status === 'approved') {
+                        actionButton = `<button onclick="openModal('${job.id}', '${job.status}')" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium">👀 View Video</button>`;
+                    } else if (isAwaitingVoice) {
+                        actionButton = `
+                            <label class="cursor-pointer bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded text-sm font-medium">
+                                🎙️ Upload Voice
+                                <input type="file" class="hidden" accept="audio/*" onchange="uploadVoice(event, '${job.id}')">
+                            </label>
+                        `;
+                    }
+                    
+                    const html = `
+                        <div class="border rounded-lg p-4 flex justify-between items-center hover:bg-gray-50 transition-colors">
+                            <div>
+                                <h3 class="font-medium text-gray-800">Job: ${job.id}</h3>
+                                <div class="flex items-center gap-2 mt-1">
+                                    <span class="text-xs font-semibold px-2 py-1 rounded-full ${statusColor}">${job.status.toUpperCase()}</span>
+                                    <span class="text-xs text-gray-500">Created: ${new Date(job.created_at).toLocaleString()}</span>
+                                </div>
+                            </div>
+                            <div>${actionButton}</div>
+                        </div>
+                    `;
+                    container.innerHTML += html;
+                });
+            } catch (error) {
+                document.getElementById('jobsList').innerHTML = '<p class="text-red-500">Gagal memuat data dari server.</p>';
+            }
+        }
+
+        async function uploadVoice(event, jobId) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const formData = new FormData();
+            formData.append("file", file);
+            
+            try {
+                alert("Mengunggah audio. Proses transkripsi dan rendering akan memakan waktu 1-2 menit di belakang layar...");
+                const response = await fetch(`/api/jobs/${jobId}/upload-audio`, {
+                    method: 'POST',
+                    body: formData
+                });
+                if(response.ok) {
+                    fetchJobs();
+                } else {
+                    const result = await response.json();
+                    alert("Error: " + result.detail);
+                }
+            } catch(e) { alert("Upload gagal."); }
+        }
+
+        function openModal(jobId, status) {
+            const modal = document.getElementById('videoModal');
+            const player = document.getElementById('videoPlayer');
+            const approveBtn = document.getElementById('approveBtn');
+            
+            document.getElementById('modalTitle').textContent = `Preview - ${jobId}`;
+            player.src = `/api/jobs/${jobId}/video`;
+            
+            if (status === 'pending_review') {
+                approveBtn.classList.remove('hidden');
+                approveBtn.onclick = () => approveJob(jobId);
+            } else {
+                approveBtn.classList.add('hidden');
+            }
+            
+            modal.classList.remove('hidden');
+            player.play().catch(e => console.log(e));
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('videoModal');
+            const player = document.getElementById('videoPlayer');
+            player.pause();
+            player.src = "";
+            modal.classList.add('hidden');
+        }
+
+        async function approveJob(jobId) {
+            try {
+                const response = await fetch(`/api/jobs/${jobId}/approve`, { method: 'POST' });
+                if (response.ok) {
+                    closeModal();
+                    fetchJobs();
+                }
+            } catch (error) { alert("Terjadi kesalahan."); }
+        }
+
+        // Segarkan data setiap 5 detik secara diam-diam
+        setInterval(fetchJobs, 5000);
+        loadProviders();
+        fetchJobs();
+    </script>
+</body>
+</html>

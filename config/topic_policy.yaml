@@ -1,0 +1,24 @@
+active_categories:
+  - animals
+  - ocean
+  - everyday_phenomena
+
+series:
+  - name: "Everyone Gets This Wrong"
+    structure: "misconception -> fact -> reason"
+    hook_pattern: "Most of us picture X. That's not quite right."
+  - name: "Strange Creatures"
+    structure: "observation -> mechanism -> conclusion"
+    hook_pattern: "This animal does X. Here's how."
+  - name: "Science at Home"
+    structure: "question -> explanation -> consequence"
+    hook_pattern: "Why does X happen when you Y?"
+
+forbidden_topics:
+  - medical_advice
+  - health_advice
+  - politics
+  - controversial_science
+  - dangerous_instructions
+  - current_events
+  - tragedies

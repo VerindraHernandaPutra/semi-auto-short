@@ -1,0 +1,17 @@
+tier_a:
+  - nasa.gov
+  - noaa.gov
+  - smithsonianmag.com
+  - nature.com
+  - sciencemag.org
+  - .edu
+
+tier_b:
+  - nationalgeographic.com
+  - britannica.com
+  - bbc.com
+  - livescience.com
+  - scientificamerican.com
+
+tier_c:
+  - wikipedia.org
