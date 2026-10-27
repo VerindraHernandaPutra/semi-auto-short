@@ -1,10 +1,10 @@
 import os
 import json
-import whisper
 from pathlib import Path
 from sqlalchemy.orm import Session
 from shorts_engine.db.models import Job
 from shorts_engine.domain.state_machine import JobState, transition_job_state
+from shorts_engine.providers.factory import get_asr_provider
 
 def run_audio_alignment(db: Session, job: Job, audio_file_path: str) -> bool:
     if not os.path.exists(audio_file_path):
@@ -14,11 +14,7 @@ def run_audio_alignment(db: Session, job: Job, audio_file_path: str) -> bool:
     transition_job_state(db, job, JobState.ALIGNING, reason="Mengekstrak timestamp kata dengan Whisper")
     
     try:
-        # Memuat model dasar Whisper (cukup ringan untuk PC standar)
-        model = whisper.load_model("base")
-        
-        # Ekstraksi dengan word_timestamps aktif
-        result = model.transcribe(audio_file_path, word_timestamps=True)
+        result = get_asr_provider().transcribe(audio_file_path)
         
         words_data = []
         for segment in result.get("segments", []):

@@ -1,9 +1,22 @@
 import datetime
-from sqlalchemy import Column, String, Integer, Float, Text, JSON, DateTime, ForeignKey, Boolean
+
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+)
 from .base import Base
+
 
 def utc_now():
     return datetime.datetime.now(datetime.timezone.utc)
+
 
 class Topic(Base):
     __tablename__ = "topics"
@@ -97,3 +110,69 @@ class CostEntry(Base):
     cost_usd = Column(Float, default=0.0)
     cost_kind = Column(String, default="actual")  # actual / estimated
     created_at = Column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class Asset(Base):
+    __tablename__ = "assets"
+
+    id = Column(String, primary_key=True, index=True)
+    provider = Column(String, nullable=False)
+    provider_asset_id = Column(String, nullable=False)
+    page_url = Column(Text, nullable=False)
+    download_url = Column(Text, nullable=False)
+    contributor = Column(String, nullable=True)
+    contributor_url = Column(Text, nullable=True)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    duration = Column(Float, nullable=True)
+    size = Column(Integer, nullable=True)
+    sha256 = Column(String(64), nullable=True)
+    attribution = Column(Text, nullable=True)
+    fetched_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class SegmentAsset(Base):
+    __tablename__ = "segment_assets"
+
+    job_id = Column(String, ForeignKey("jobs.id"), primary_key=True)
+    script_version = Column(Integer, primary_key=True)
+    segment_index = Column(Integer, primary_key=True)
+    asset_id = Column(String, ForeignKey("assets.id"), nullable=False, index=True)
+    start_s = Column(Float, nullable=True)
+    end_s = Column(Float, nullable=True)
+    relevance_score = Column(Float, nullable=True)
+    relevance_reason = Column(Text, nullable=True)
+    flags = Column(JSON, nullable=False, default=list)
+
+
+class Artifact(Base):
+    __tablename__ = "artifacts"
+
+    job_id = Column(String, ForeignKey("jobs.id"), primary_key=True)
+    kind = Column(String, primary_key=True)
+    version = Column(Integer, primary_key=True)
+    path = Column(Text, nullable=False)
+    sha256 = Column(String(64), nullable=True)
+    valid = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class Approval(Base):
+    __tablename__ = "approvals"
+
+    job_id = Column(String, ForeignKey("jobs.id"), primary_key=True)
+    script_version = Column(Integer, primary_key=True)
+    final_sha256 = Column(String(64), primary_key=True)
+    decision = Column(String, nullable=False)
+    answers = Column(JSON, nullable=True)
+    reason = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)
+    invalidated_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class Publication(Base):
+    __tablename__ = "publications"
+
+    job_id = Column(String, ForeignKey("jobs.id"), primary_key=True)
+    youtube_url = Column(Text, nullable=False, unique=True)
+    published_at = Column(DateTime(timezone=True), default=utc_now, nullable=False)

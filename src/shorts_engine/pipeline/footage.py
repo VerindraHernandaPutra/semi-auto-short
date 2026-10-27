@@ -4,8 +4,8 @@ import httpx
 from pathlib import Path
 from sqlalchemy.orm import Session
 from shorts_engine.db.models import Job, Script
-from shorts_engine.providers.video.pexels import PexelsProvider
 from shorts_engine.domain.state_machine import JobState, transition_job_state
+from shorts_engine.providers.factory import get_footage_provider
 
 def run_footage_selection(db: Session, job: Job) -> bool:
     script = db.query(Script).filter(Script.job_id == job.id).first()
@@ -13,7 +13,7 @@ def run_footage_selection(db: Session, job: Job) -> bool:
         transition_job_state(db, job, JobState.FAILED, reason="Naskah tidak ditemukan")
         return False
         
-    provider = PexelsProvider()
+    provider = get_footage_provider()
     job_dir = Path("data") / "jobs" / job.id / "footage"
     os.makedirs(job_dir, exist_ok=True)
     
@@ -59,6 +59,15 @@ def run_footage_selection(db: Session, job: Job) -> bool:
                 "local_path": str(file_path)
             })
             
+    if len(footage_plan) != len(script.segments):
+        transition_job_state(
+            db,
+            job,
+            JobState.DROPPED,
+            reason="no_footage_for_all_script_segments",
+        )
+        return False
+
     # Simpan rencana footage
     with open(job_dir / "footage_plan.json", "w", encoding="utf-8") as f:
         json.dump(footage_plan, f, indent=2)
