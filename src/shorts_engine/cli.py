@@ -8,7 +8,7 @@ import uvicorn
 from alembic import command
 from alembic.config import Config
 from alembic.util.exc import CommandError
-from sqlalchemy import desc, text
+from sqlalchemy import desc
 from sqlalchemy.exc import SQLAlchemyError
 
 from shorts_engine.config import ConfigError, validate_config_files
@@ -39,10 +39,9 @@ app = typer.Typer(help="Shorts Engine CLI - Produksi Video Otomatis")
 
 
 def _migrate_to_head() -> None:
+    get_database_path().parent.mkdir(parents=True, exist_ok=True)
     alembic_config = Config(str(PROJECT_ROOT / "alembic.ini"))
-    alembic_config.set_main_option(
-        "sqlalchemy.url", get_database_url().replace("%", "%%")
-    )
+    alembic_config.set_main_option("sqlalchemy.url", get_database_url().replace("%", "%%"))
     command.upgrade(alembic_config, "head")
 
 
@@ -79,10 +78,14 @@ def doctor():
     report = collect_doctor_report()
     for check in report.checks:
         typer.echo(f"[{check.status}] {check.name}: {check.detail}")
-    typer.echo("Mode render: " + ("GPU/NVENC tersedia" if any(
-        check.name == "h264_nvenc" and check.status == "OK"
-        for check in report.checks
-    ) else "CPU fallback"))
+    typer.echo(
+        "Mode render: "
+        + (
+            "GPU/NVENC tersedia"
+            if any(check.name == "h264_nvenc" and check.status == "OK" for check in report.checks)
+            else "CPU fallback"
+        )
+    )
     if not report.ok:
         raise typer.Exit(code=1)
 
@@ -141,10 +144,7 @@ def status(job_id: str = typer.Argument(..., help="ID pekerjaan")):
         typer.echo("Riwayat:")
         for event in events:
             previous = event.from_state or "(awal)"
-            typer.echo(
-                f"  {previous} -> {event.to_state} [{event.actor}] "
-                f"{event.reason or ''}"
-            )
+            typer.echo(f"  {previous} -> {event.to_state} [{event.actor}] {event.reason or ''}")
     except SQLAlchemyError as exc:
         typer.echo(f"Gagal membaca status job: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -192,9 +192,7 @@ def backup(
         raise typer.Exit(code=1)
 
     destination = output or (
-        get_data_dir()
-        / "backups"
-        / f"shorts-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.db"
+        get_data_dir() / "backups" / f"shorts-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}.db"
     )
     destination = destination.expanduser().resolve()
     if destination == source_path.resolve():
@@ -228,9 +226,7 @@ def topics_command(
             typer.echo(f"Berhasil menambahkan {len(new_topics)} topik baru.")
         else:
             typer.echo("Antrean Topik Saat Ini:")
-            topics_in_db = (
-                db.query(Topic).filter(Topic.status == "candidate").all()
-            )
+            topics_in_db = db.query(Topic).filter(Topic.status == "candidate").all()
             for topic in topics_in_db:
                 typer.echo(f"  - [{topic.category}] {topic.text}")
     finally:
@@ -246,9 +242,7 @@ def produce_command(
     try:
         for index in range(count):
             typer.echo(f"\n--- Memulai Produksi #{index + 1} ---")
-            topic = (
-                db.query(Topic).filter(Topic.status == "candidate").first()
-            )
+            topic = db.query(Topic).filter(Topic.status == "candidate").first()
             if not topic:
                 typer.echo(
                     "Antrean topik kosong. Jalankan `shorts topics --refill` terlebih dahulu."

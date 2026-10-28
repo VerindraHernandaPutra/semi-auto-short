@@ -1,7 +1,6 @@
-import sqlite3
 import logging
+import sqlite3
 from importlib.machinery import ModuleSpec
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -27,6 +26,18 @@ def test_project_configuration_loads_and_validates():
     assert config.settings["content_language"] == "en"
     assert config.topic_policy["active_categories"]
     assert config.source_whitelist["tier_a"]
+
+
+def test_style_guide_is_loaded_from_config_dir():
+    assert "Persona" in config_module.load_style_guide()
+
+
+def test_empty_style_guide_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(config_module, "CONFIG_DIR", tmp_path)
+    (tmp_path / "style_guide.md").write_text("  \n", encoding="utf-8")
+
+    with pytest.raises(config_module.ConfigError, match="empty"):
+        config_module.load_style_guide()
 
 
 def test_invalid_configuration_fails_with_actionable_error(tmp_path, monkeypatch):
@@ -162,19 +173,13 @@ def test_doctor_reports_missing_media_dependencies_as_failures():
     assert report.ok is False
 
 
-def test_doctor_passes_for_cpu_mode_when_required_media_tools_exist(
-    tmp_path, monkeypatch
-):
+def test_doctor_passes_for_cpu_mode_when_required_media_tools_exist(tmp_path, monkeypatch):
     database = tmp_path / "doctor.db"
     doctor_engine = create_engine(f"sqlite:///{database.as_posix()}")
     Base.metadata.create_all(doctor_engine)
     with doctor_engine.begin() as connection:
-        connection.execute(
-            text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)")
-        )
-        connection.execute(
-            text("INSERT INTO alembic_version VALUES ('phase1-revision')")
-        )
+        connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+        connection.execute(text("INSERT INTO alembic_version VALUES ('phase1-revision')"))
 
     monkeypatch.setattr(
         doctor_module.importlib.util,
@@ -212,4 +217,7 @@ def test_doctor_passes_for_cpu_mode_when_required_media_tools_exist(
 
     assert report.ok
     assert next(check for check in report.checks if check.name == "GPU/CUDA/VRAM").status == "WARN"
-    assert next(check for check in report.checks if check.name == "FFmpeg libass/subtitles").status == "OK"
+    assert (
+        next(check for check in report.checks if check.name == "FFmpeg libass/subtitles").status
+        == "OK"
+    )

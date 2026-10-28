@@ -40,9 +40,14 @@ def run_migrations_online() -> None:
         if connection.dialect.name == "sqlite":
             connection.exec_driver_sql("PRAGMA foreign_keys=ON")
             connection.exec_driver_sql("PRAGMA journal_mode=WAL")
+            # PRAGMA autobegins a transaction; end it so migrations start clean.
+            connection.commit()
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()
+        # SQLite DDL is non-transactional in Alembic; without this commit the
+        # SQLAlchemy 2 connection rolls back on close and loses alembic_version.
+        connection.commit()
 
 
 if context.is_offline_mode():

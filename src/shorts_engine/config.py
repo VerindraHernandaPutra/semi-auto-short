@@ -10,6 +10,7 @@ EXPECTED_CONFIG_FILES = (
     "settings.yaml",
     "source_whitelist.yaml",
     "topic_policy.yaml",
+    "style_guide.md",
 )
 
 
@@ -27,9 +28,10 @@ class AppConfig(BaseModel):
     @field_validator("settings")
     @classmethod
     def validate_settings(cls, settings: dict[str, Any]):
-        if not isinstance(settings.get("content_language"), str) or not settings[
-            "content_language"
-        ].strip():
+        if (
+            not isinstance(settings.get("content_language"), str)
+            or not settings["content_language"].strip()
+        ):
             raise ValueError("content_language must be a non-empty string")
 
         models = settings.get("models")
@@ -46,13 +48,8 @@ class AppConfig(BaseModel):
         quote_threshold = verification.get("quote_similarity_threshold")
         if not isinstance(minimum_claims, int) or minimum_claims < 1:
             raise ValueError("verification.min_verified_claims must be a positive integer")
-        if (
-            not isinstance(quote_threshold, (int, float))
-            or not 0 <= quote_threshold <= 1
-        ):
-            raise ValueError(
-                "verification.quote_similarity_threshold must be between 0 and 1"
-            )
+        if not isinstance(quote_threshold, (int, float)) or not 0 <= quote_threshold <= 1:
+            raise ValueError("verification.quote_similarity_threshold must be between 0 and 1")
 
         speech = settings.get("speech")
         if not isinstance(speech, dict):
@@ -78,10 +75,7 @@ class AppConfig(BaseModel):
             domains = whitelist.get(tier)
             if domains is not None and (
                 not isinstance(domains, list)
-                or any(
-                    not isinstance(domain, str) or not domain.strip()
-                    for domain in domains
-                )
+                or any(not isinstance(domain, str) or not domain.strip() for domain in domains)
             ):
                 raise ValueError(f"{tier} must be a list of non-empty domains")
         return whitelist
@@ -107,13 +101,23 @@ def load_yaml(file_name: str) -> dict[str, Any]:
         with file_path.open("r", encoding="utf-8") as config_file:
             data = yaml.safe_load(config_file)
     except (OSError, yaml.YAMLError) as exc:
-        raise ConfigError(
-            f"Unable to read configuration file {file_path}: {exc}"
-        ) from exc
+        raise ConfigError(f"Unable to read configuration file {file_path}: {exc}") from exc
 
     if not isinstance(data, dict):
         raise ConfigError(f"Configuration file must contain a YAML mapping: {file_path}")
     return data
+
+
+def load_style_guide() -> str:
+    """Return the persona and script rules text; read fresh so edits apply at once."""
+    file_path = CONFIG_DIR / "style_guide.md"
+    try:
+        text = file_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"Unable to read style guide {file_path}: {exc}") from exc
+    if not text.strip():
+        raise ConfigError(f"Style guide is empty: {file_path}")
+    return text
 
 
 def get_config() -> AppConfig:
@@ -129,9 +133,8 @@ def get_config() -> AppConfig:
 
 
 def validate_config_files() -> AppConfig:
-    missing = [
-        name for name in EXPECTED_CONFIG_FILES if not (CONFIG_DIR / name).is_file()
-    ]
+    missing = [name for name in EXPECTED_CONFIG_FILES if not (CONFIG_DIR / name).is_file()]
     if missing:
         raise ConfigError(f"Missing configuration files: {', '.join(missing)}")
+    load_style_guide()
     return get_config()
