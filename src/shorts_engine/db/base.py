@@ -37,6 +37,7 @@ def create_database_engine(database_url: str | None = None):
     )
 
     if url.startswith("sqlite"):
+
         @event.listens_for(engine, "connect")
         def configure_sqlite(dbapi_connection, _connection_record):
             cursor = dbapi_connection.cursor()

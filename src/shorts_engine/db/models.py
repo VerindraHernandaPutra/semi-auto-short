@@ -1,26 +1,27 @@
 import datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     DateTime,
     Float,
     ForeignKey,
     Integer,
-    JSON,
     String,
     Text,
 )
+
 from .base import Base
 
 
 def utc_now():
-    return datetime.datetime.now(datetime.timezone.utc)
+    return datetime.datetime.now(datetime.UTC)
 
 
 class Topic(Base):
     __tablename__ = "topics"
-    
+
     id = Column(String, primary_key=True, index=True)
     text = Column(Text, nullable=False)
     category = Column(String, nullable=False)
@@ -31,9 +32,10 @@ class Topic(Base):
     status = Column(String, nullable=False, default="candidate", index=True)
     reason = Column(Text, nullable=True)
 
+
 class Job(Base):
     __tablename__ = "jobs"
-    
+
     id = Column(String, primary_key=True, index=True)
     topic_id = Column(String, ForeignKey("topics.id"), nullable=False)
     content_language = Column(String, default="en")
@@ -46,9 +48,10 @@ class Job(Base):
     updated_at = Column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, index=True)
     error = Column(Text, nullable=True)
 
+
 class JobEvent(Base):
     __tablename__ = "job_events"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     job_id = Column(String, ForeignKey("jobs.id"), nullable=False, index=True)
     from_state = Column(String, nullable=True)
@@ -57,9 +60,10 @@ class JobEvent(Base):
     reason = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utc_now)
 
+
 class Source(Base):
     __tablename__ = "sources"
-    
+
     id = Column(String, primary_key=True, index=True)
     job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
     url = Column(Text, nullable=False)
@@ -70,9 +74,10 @@ class Source(Base):
     accessed_at = Column(DateTime(timezone=True), default=utc_now)
     extracted_text_path = Column(Text, nullable=True)
 
+
 class Claim(Base):
     __tablename__ = "claims"
-    
+
     id = Column(String, primary_key=True, index=True)
     job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
     source_ids = Column(JSON, nullable=False)  # List of source IDs
@@ -84,9 +89,10 @@ class Claim(Base):
     status = Column(String, nullable=False)  # verified / rejected
     reject_reason = Column(Text, nullable=True)
 
+
 class Script(Base):
     __tablename__ = "scripts"
-    
+
     id = Column(String, primary_key=True, index=True)
     job_id = Column(String, ForeignKey("jobs.id"), nullable=False)
     version = Column(Integer, default=1)
@@ -97,9 +103,10 @@ class Script(Base):
     check_results = Column(JSON, nullable=True)
     status = Column(String, nullable=False)  # passed / failed
 
+
 class CostEntry(Base):
     __tablename__ = "cost_entries"
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     job_id = Column(String, ForeignKey("jobs.id"), nullable=True, index=True)
     provider = Column(String, nullable=False)  # anthropic, tavily, pexels

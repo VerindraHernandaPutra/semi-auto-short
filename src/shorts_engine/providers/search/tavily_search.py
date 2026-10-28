@@ -23,32 +23,31 @@ class TavilyProvider(BaseSearchProvider):
 
     def search_and_extract(self, queries: list[str]) -> list[dict[str, Any]]:
         all_results = []
-        
+
         for query in queries:
             try:
                 response = self.client.search(
-                    query=query,
-                    search_depth="advanced",
-                    include_raw_content=True,
-                    max_results=3
+                    query=query, search_depth="advanced", include_raw_content=True, max_results=3
                 )
-                
+
                 for result in response.get("results", []):
                     url = result.get("url", "")
                     # Ambil domain utama dari URL
                     domain = url.split("/")[2] if "//" in url else url.split("/")[0]
                     domain = domain.replace("www.", "")
-                    
+
                     tier = self._get_tier(domain)
-                    
-                    all_results.append({
-                        "url": url,
-                        "domain": domain,
-                        "title": result.get("title", ""),
-                        "content": result.get("raw_content", result.get("content", "")),
-                        "tier": tier
-                    })
+
+                    all_results.append(
+                        {
+                            "url": url,
+                            "domain": domain,
+                            "title": result.get("title", ""),
+                            "content": result.get("raw_content", result.get("content", "")),
+                            "tier": tier,
+                        }
+                    )
             except Exception as e:
                 print(f"Error saat mencari '{query}': {e}")
-                
+
         return all_results

@@ -1,5 +1,7 @@
 from enum import Enum
+
 from sqlalchemy.orm import Session
+
 from shorts_engine.db.models import Job, JobEvent
 
 
@@ -134,8 +136,7 @@ def transition_job_state(
 
     if new_state not in ALLOWED_TRANSITIONS[current_state]:
         raise InvalidStateTransition(
-            f"Job {job.id} cannot transition from "
-            f"{current_state.value!r} to {new_state.value!r}"
+            f"Job {job.id} cannot transition from {current_state.value!r} to {new_state.value!r}"
         )
 
     job.status = new_state.value

@@ -1,3 +1,8 @@
+from .asr.base import BaseASRProvider
+from .asr.mock import MockASRProvider
+from .asr.whisper_provider import WhisperASRProvider
+from .footage.base import BaseFootageProvider
+from .footage.mock import MockFootageProvider
 from .llm.anthropic import AnthropicProvider
 from .llm.base import BaseLLMProvider
 from .llm.mock import MockLLMProvider
@@ -5,11 +10,6 @@ from .llm.ollama_provider import OllamaProvider
 from .search.base import BaseSearchProvider
 from .search.mock import MockSearchProvider
 from .search.tavily_search import TavilyProvider
-from .asr.base import BaseASRProvider
-from .asr.mock import MockASRProvider
-from .asr.whisper_provider import WhisperASRProvider
-from .footage.base import BaseFootageProvider
-from .footage.mock import MockFootageProvider
 from .video.pexels import PexelsProvider
 
 LLM_PROVIDERS = {"mock", "ollama", "anthropic"}
@@ -17,8 +17,8 @@ SEARCH_PROVIDERS = {"mock", "tavily"}
 FOOTAGE_PROVIDERS = {"mock", "pexels"}
 ASR_PROVIDERS = {"mock", "whisper"}
 
-ACTIVE_LLM_PROVIDER = "mock"      # Opsi: mock, ollama, anthropic
-ACTIVE_SEARCH_PROVIDER = "mock"   # Opsi: mock, tavily
+ACTIVE_LLM_PROVIDER = "mock"  # Opsi: mock, ollama, anthropic
+ACTIVE_SEARCH_PROVIDER = "mock"  # Opsi: mock, tavily
 ACTIVE_FOOTAGE_PROVIDER = "pexels"
 ACTIVE_ASR_PROVIDER = "whisper"
 

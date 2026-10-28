@@ -78,7 +78,7 @@ def run_verify(db: Session, job: Job) -> bool:
             )
             return False
         try:
-            with open(source.extracted_text_path, "r", encoding="utf-8") as source_file:
+            with open(source.extracted_text_path, encoding="utf-8") as source_file:
                 source_texts[source.id] = source_file.read()
         except OSError:
             transition_job_state(
@@ -90,9 +90,7 @@ def run_verify(db: Session, job: Job) -> bool:
             return False
 
     if not sources:
-        transition_job_state(
-            db, job, JobState.DROPPED, reason="Tidak ada sumber Tier A/B"
-        )
+        transition_job_state(db, job, JobState.DROPPED, reason="Tidak ada sumber Tier A/B")
         return False
 
     model_heavy = config.settings.get("models", {}).get("heavy", "claude-sonnet-5-5")
@@ -110,9 +108,7 @@ def run_verify(db: Session, job: Job) -> bool:
     )
 
     try:
-        extracted = llm.generate_structured(
-            prompt_extract, ExtractedClaims, model_heavy
-        )
+        extracted = llm.generate_structured(prompt_extract, ExtractedClaims, model_heavy)
     except Exception:
         transition_job_state(
             db,
@@ -142,9 +138,7 @@ def run_verify(db: Session, job: Job) -> bool:
             continue
 
         source_content = source_texts[source.id]
-        assessment.quote_score = quote_similarity(
-            source_content, candidate.supporting_quote
-        )
+        assessment.quote_score = quote_similarity(source_content, candidate.supporting_quote)
         if assessment.quote_score < threshold:
             assessment.reject_reason = "supporting_quote_not_found"
             continue
@@ -161,9 +155,7 @@ def run_verify(db: Session, job: Job) -> bool:
             f"Claim: {candidate.text}\nQuote: {candidate.supporting_quote}"
         )
         try:
-            check_result = llm.generate_structured(
-                prompt_check, ClaimSupportCheck, model_light
-            )
+            check_result = llm.generate_structured(prompt_check, ClaimSupportCheck, model_light)
         except Exception:
             transition_job_state(
                 db,
@@ -190,8 +182,7 @@ def run_verify(db: Session, job: Job) -> bool:
         domains = {
             source_independence_domain(_source_domain(assessment.source), whitelist)
             for assessment in group
-            if assessment.source is not None
-            and _source_domain(assessment.source) is not None
+            if assessment.source is not None and _source_domain(assessment.source) is not None
         }
         if len(domains) >= 2:
             verified_hook_keys.add(key)
@@ -220,13 +211,9 @@ def run_verify(db: Session, job: Job) -> bool:
     db.commit()
 
     verified_claim_keys = {
-        claim_key(assessment.candidate.text)
-        for assessment in assessments
-        if assessment.verified
+        claim_key(assessment.candidate.text) for assessment in assessments if assessment.verified
     }
-    min_claims = int(
-        config.settings.get("verification", {}).get("min_verified_claims", 3)
-    )
+    min_claims = int(config.settings.get("verification", {}).get("min_verified_claims", 3))
     if len(verified_claim_keys) < min_claims or not verified_hook_keys:
         transition_job_state(
             db,

@@ -1,6 +1,7 @@
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+
 from shorts_engine.db.base import Base
 from shorts_engine.db.models import Job, JobEvent, Topic
 from shorts_engine.domain.state_machine import (

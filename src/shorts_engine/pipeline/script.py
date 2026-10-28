@@ -11,9 +11,7 @@ from shorts_engine.providers.factory import get_llm_provider, is_mock_provider
 
 
 def _claim_text_for_ids(claim_ids: list[str], claims_by_id: dict[str, Claim]) -> str:
-    return "\n".join(
-        f"[{claim_id}] {claims_by_id[claim_id].text}" for claim_id in claim_ids
-    )
+    return "\n".join(f"[{claim_id}] {claims_by_id[claim_id].text}" for claim_id in claim_ids)
 
 
 def _validate_references(script_data: ScriptOutput, claims_by_id: dict[str, Claim]):
@@ -68,21 +66,22 @@ def run_script(db: Session, job: Job) -> bool:
             reason="mock_provider_not_allowed_for_production_script",
         )
         return False
-    
+
     # Ambil hanya klaim yang lolos verifikasi
-    verified_claims = db.query(Claim).filter(
-        Claim.job_id == job.id, 
-        Claim.status == "verified"
-    ).all()
-    
+    verified_claims = (
+        db.query(Claim).filter(Claim.job_id == job.id, Claim.status == "verified").all()
+    )
+
     if not verified_claims:
-        transition_job_state(db, job, JobState.DROPPED, reason="Tidak ada klaim verified untuk naskah")
+        transition_job_state(
+            db, job, JobState.DROPPED, reason="Tidak ada klaim verified untuk naskah"
+        )
         return False
 
     transition_job_state(db, job, JobState.SCRIPTING, reason="Mulai penulisan naskah")
-    
+
     claims_text = "\n".join([f"- [{c.id}] {c.text}" for c in verified_claims])
-    
+
     prompt = f"""
     Tulis naskah video pendek sains (Shorts) berdasarkan fakta berikut HANYA. 
     Setiap kalimat faktual, termasuk hook, harus mencantumkan claim_id yang mendukungnya.
@@ -90,9 +89,9 @@ def run_script(db: Session, job: Job) -> bool:
     Fakta:
     {claims_text}
     """
-    
+
     model_heavy = config.settings.get("models", {}).get("heavy", "claude-sonnet-5-5")
-    
+
     try:
         script_data = llm.generate_structured(prompt, ScriptOutput, model_heavy)
     except Exception:
@@ -112,12 +111,8 @@ def run_script(db: Session, job: Job) -> bool:
         )
         return False
 
-    min_duration = int(
-        config.settings.get("speech", {}).get("target_duration_min", 35)
-    )
-    max_duration = int(
-        config.settings.get("speech", {}).get("target_duration_max", 55)
-    )
+    min_duration = int(config.settings.get("speech", {}).get("target_duration_min", 35))
+    max_duration = int(config.settings.get("speech", {}).get("target_duration_max", 55))
     if not min_duration <= script_data.estimated_duration_s <= max_duration:
         transition_job_state(
             db,
@@ -130,10 +125,7 @@ def run_script(db: Session, job: Job) -> bool:
     model_light = config.settings.get("models", {}).get("light", "claude-haiku-5-5")
     statements = [
         (script_data.hook, script_data.hook_claim_ids),
-        *[
-            (segment.text, segment.claim_ids)
-            for segment in script_data.segments
-        ],
+        *[(segment.text, segment.claim_ids) for segment in script_data.segments],
     ]
     statements.append((script_data.ending, script_data.ending_claim_ids))
     statements.append((script_data.title_working, list(claims_by_id)))
@@ -149,9 +141,7 @@ def run_script(db: Session, job: Job) -> bool:
             f"Verified claims:\n{_claim_text_for_ids(claim_ids, claims_by_id)}"
         )
         try:
-            check = llm.generate_structured(
-                prompt_check, ScriptClaimCheck, model_light
-            )
+            check = llm.generate_structured(prompt_check, ScriptClaimCheck, model_light)
         except Exception:
             transition_job_state(
                 db,
@@ -194,11 +184,11 @@ def run_script(db: Session, job: Job) -> bool:
             "title_claim_ids": list(claims_by_id),
             "script_claim_checks": script_checks,
         },
-        status="passed"
+        status="passed",
     )
     db.add(new_script)
     db.commit()
-    
+
     # Naskah siap direkam oleh pengguna
     transition_job_state(db, job, JobState.AWAITING_VOICE, reason="Naskah selesai dan siap direkam")
     return True

@@ -4,16 +4,17 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from shorts_engine.config import ConfigError, validate_config_files
-from shorts_engine.db.base import engine as default_engine, get_data_dir
+from shorts_engine.db.base import engine as default_engine
+from shorts_engine.db.base import get_data_dir
 
 REQUIRED_TABLES = {
     "topics",
@@ -136,12 +137,8 @@ def collect_doctor_report(
     ffmpeg_filters = ""
     ffmpeg_encoders = ""
     if ffmpeg_path:
-        filters_result = _tool_output(
-            [ffmpeg_path, "-hide_banner", "-filters"], runner
-        )
-        encoders_result = _tool_output(
-            [ffmpeg_path, "-hide_banner", "-encoders"], runner
-        )
+        filters_result = _tool_output([ffmpeg_path, "-hide_banner", "-filters"], runner)
+        encoders_result = _tool_output([ffmpeg_path, "-hide_banner", "-encoders"], runner)
         ffmpeg_filters = filters_result.stdout + filters_result.stderr
         ffmpeg_encoders = encoders_result.stdout + encoders_result.stderr
 
@@ -179,9 +176,7 @@ def collect_doctor_report(
         )
     else:
         gpu_result = None
-    gpu_available = bool(
-        gpu_result and gpu_result.returncode == 0 and gpu_result.stdout.strip()
-    )
+    gpu_available = bool(gpu_result and gpu_result.returncode == 0 and gpu_result.stdout.strip())
     checks.append(
         DoctorCheck(
             "GPU/CUDA/VRAM",
@@ -208,9 +203,7 @@ def collect_doctor_report(
     )
 
     resolved_data_dir = data_dir or get_data_dir()
-    data_accessible = resolved_data_dir.is_dir() and os.access(
-        resolved_data_dir, os.R_OK | os.W_OK
-    )
+    data_accessible = resolved_data_dir.is_dir() and os.access(resolved_data_dir, os.R_OK | os.W_OK)
     checks.append(
         DoctorCheck(
             "Data directory",
@@ -228,9 +221,7 @@ def collect_doctor_report(
             missing_tables = REQUIRED_TABLES - existing_tables
             migration_exists = "alembic_version" in existing_tables
             revision = (
-                connection.execute(
-                    text("SELECT version_num FROM alembic_version LIMIT 1")
-                ).scalar()
+                connection.execute(text("SELECT version_num FROM alembic_version LIMIT 1")).scalar()
                 if migration_exists
                 else None
             )

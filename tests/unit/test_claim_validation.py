@@ -46,18 +46,12 @@ def make_job(session, status=JobState.VERIFYING):
 
 def test_quote_similarity_matches_normalized_quote_in_source():
     assert (
-        quote_similarity(
-            "A whale can dive 30 meters below.", "A WHALE can dive 30 meters"
-        )
-        == 1.0
+        quote_similarity("A whale can dive 30 meters below.", "A WHALE can dive 30 meters") == 1.0
     )
 
 
 def test_quote_similarity_rejects_unrelated_quote():
-    assert (
-        quote_similarity("The bird nests in trees.", "The whale swims in deep water.")
-        < 0.92
-    )
+    assert quote_similarity("The bird nests in trees.", "The whale swims in deep water.") < 0.92
 
 
 @pytest.mark.parametrize(
@@ -195,16 +189,12 @@ def test_claim_verification_requires_quotes_and_independent_hook_domains(
             source_id="source_b",
         ),
     ]
-    monkeypatch.setattr(
-        verify_module, "get_llm_provider", lambda: VerifiedFakeLLM(candidates)
-    )
+    monkeypatch.setattr(verify_module, "get_llm_provider", lambda: VerifiedFakeLLM(candidates))
     monkeypatch.setattr(verify_module, "get_search_provider", lambda: object())
 
     assert run_verify(db_session, job) is True
     verified_claims = (
-        db_session.query(Claim)
-        .filter(Claim.job_id == job.id, Claim.status == "verified")
-        .all()
+        db_session.query(Claim).filter(Claim.job_id == job.id, Claim.status == "verified").all()
     )
     assert len(verified_claims) == 4
     assert sum(claim.is_hook for claim in verified_claims) == 2
@@ -241,9 +231,7 @@ def test_hook_claim_from_one_domain_is_not_verified(db_session, monkeypatch, tmp
             source_id="source_b",
         ),
     ]
-    monkeypatch.setattr(
-        verify_module, "get_llm_provider", lambda: VerifiedFakeLLM(candidates)
-    )
+    monkeypatch.setattr(verify_module, "get_llm_provider", lambda: VerifiedFakeLLM(candidates))
     monkeypatch.setattr(verify_module, "get_search_provider", lambda: object())
 
     assert run_verify(db_session, job) is False
@@ -315,9 +303,7 @@ def test_factual_script_cannot_introduce_unsupported_number():
         status="verified",
     )
 
-    assert "number or unit" in _validate_references(
-        script_data, {"claim_1": verified_claim}
-    )
+    assert "number or unit" in _validate_references(script_data, {"claim_1": verified_claim})
 
 
 class ValidatingFakeLLM:
@@ -332,9 +318,7 @@ class ValidatingFakeLLM:
         raise AssertionError(f"Unexpected schema requested: {schema.__name__}")
 
 
-def test_valid_script_is_audited_before_job_becomes_recordable(
-    db_session, monkeypatch
-):
+def test_valid_script_is_audited_before_job_becomes_recordable(db_session, monkeypatch):
     import shorts_engine.pipeline.script as script_module
 
     job = make_job(db_session)
