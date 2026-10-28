@@ -11,6 +11,7 @@ dependencies = [
     "httpx>=0.28.1",
     "openai-whisper>=20250625",
     "pydantic>=2.14.1",
+    "python-dotenv>=1.2.4",
     "pyyaml>=6.0.3",
     "sqlalchemy>=2.1.6",
     "tavily-python>=0.8.5",
