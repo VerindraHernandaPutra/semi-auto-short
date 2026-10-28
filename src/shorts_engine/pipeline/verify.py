@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
-from shorts_engine.config import get_config
+from shorts_engine.config import AppConfig, get_config
 from shorts_engine.db.models import Claim, Job, Source
 from shorts_engine.domain.schemas import (
     ClaimCandidate,
@@ -22,10 +22,13 @@ from shorts_engine.providers.factory import (
     get_search_provider,
     is_mock_provider,
 )
+from shorts_engine.providers.llm.base import BaseLLMProvider, LLMProviderError
+from shorts_engine.providers.search.base import BaseSearchProvider
 from shorts_engine.providers.search.tiers import (
     classify_domain,
     source_independence_domain,
 )
+from shorts_engine.services.costs import check_budget, track_costs
 
 
 @dataclass
@@ -45,10 +48,16 @@ def _source_domain(source: Source) -> str | None:
     return hostname.lower().removeprefix("www.").rstrip(".")
 
 
-def run_verify(db: Session, job: Job) -> bool:
-    config = get_config()
-    llm = get_llm_provider()
-    search = get_search_provider()
+def run_verify(
+    db: Session,
+    job: Job,
+    llm: BaseLLMProvider | None = None,
+    search: BaseSearchProvider | None = None,
+    config: AppConfig | None = None,
+) -> bool:
+    config = config or get_config()
+    llm = llm or get_llm_provider()
+    search = search or get_search_provider()
 
     if is_mock_provider(llm) or is_mock_provider(search):
         transition_job_state(
@@ -59,6 +68,12 @@ def run_verify(db: Session, job: Job) -> bool:
         )
         return False
 
+    check_budget(db, config, job.id)  # refused before any paid call; the job stays resumable
+    with track_costs(db, config, job.id, llm=llm):
+        return _verify(db, job, llm, config)
+
+
+def _verify(db: Session, job: Job, llm: BaseLLMProvider, config: AppConfig) -> bool:
     all_sources = db.query(Source).filter(Source.job_id == job.id).all()
     whitelist = config.source_whitelist
     sources = {}
@@ -96,8 +111,7 @@ def run_verify(db: Session, job: Job) -> bool:
     model_heavy = config.settings.get("models", {}).get("heavy", "claude-sonnet-5-5")
     model_light = config.settings.get("models", {}).get("light", "claude-haiku-5-5")
     source_text = "\n".join(
-        f"\n--- ID: {source_id} ---\n{content[:20000]}"
-        for source_id, content in source_texts.items()
+        f"\n--- ID: {source_id} ---\n{content}" for source_id, content in source_texts.items()
     )
     prompt_extract = (
         "Extract factual scientific claims from these sources. For each claim, "
@@ -109,13 +123,8 @@ def run_verify(db: Session, job: Job) -> bool:
 
     try:
         extracted = llm.generate_structured(prompt_extract, ExtractedClaims, model_heavy)
-    except Exception:
-        transition_job_state(
-            db,
-            job,
-            JobState.FAILED,
-            reason="Claim extraction provider failed or returned an invalid response",
-        )
+    except LLMProviderError as exc:
+        transition_job_state(db, job, JobState.FAILED, reason=f"Claim extraction failed: {exc}")
         return False
 
     threshold = float(
@@ -156,12 +165,9 @@ def run_verify(db: Session, job: Job) -> bool:
         )
         try:
             check_result = llm.generate_structured(prompt_check, ClaimSupportCheck, model_light)
-        except Exception:
+        except LLMProviderError as exc:
             transition_job_state(
-                db,
-                job,
-                JobState.FAILED,
-                reason="Claim support provider failed or returned an invalid response",
+                db, job, JobState.FAILED, reason=f"Claim support check failed: {exc}"
             )
             return False
 

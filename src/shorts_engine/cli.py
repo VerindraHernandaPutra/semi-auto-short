@@ -42,9 +42,24 @@ from shorts_engine.pipeline.topics import (
 )
 from shorts_engine.pipeline.verify import run_verify
 from shorts_engine.providers.factory import use_mock_providers
-from shorts_engine.services.costs import BudgetExceeded, cost_report
+from shorts_engine.services.costs import (
+    BudgetExceeded,
+    SearchQuotaExceeded,
+    cost_report,
+)
+from shorts_engine.services.jobs import release_unstarted_job
 
 app = typer.Typer(help="Shorts Engine CLI - Produksi Video Otomatis")
+
+
+def _limit_message(exc: Exception) -> str:
+    """Plain-language Indonesian explanation of a budget or quota stop."""
+    if isinstance(exc, SearchQuotaExceeded):
+        return (
+            f"kuota pencarian bulan ini hampir habis ({exc.used} dari {exc.limit} kredit "
+            f"{exc.provider})."
+        )
+    return f"anggaran {exc.scope} habis (Rp{exc.spent_idr:,.0f} dari Rp{exc.limit_idr:,.0f})."
 
 
 def _open_session(dry_run: bool):
@@ -290,9 +305,13 @@ def costs_command():
         if status.warning:
             typer.echo("Peringatan: pemakaian sudah melewati 80% dari anggaran bulanan.")
         for item in report.operations:
+            if item.provider == "tavily":
+                usage = f"{item.input_tokens} kredit"
+            else:
+                usage = f"{item.input_tokens}/{item.output_tokens} token"
             typer.echo(
-                f"  {item.operation}: {item.calls} panggilan, "
-                f"{item.input_tokens}/{item.output_tokens} token, Rp{item.cost_idr:,.1f}"
+                f"  {item.provider} {item.operation}: {item.calls} panggilan, {usage}, "
+                f"Rp{item.cost_idr:,.1f}"
             )
         if report.unpriced_entries:
             typer.echo(
@@ -344,13 +363,21 @@ def produce_command(
             db.commit()
             typer.echo(f"Topik terpilih: {topic.text} (Job ID: {job_id})")
 
-            if run_research(db, job) and run_verify(db, job):
-                if run_script(db, job):
-                    typer.echo(f"Berhasil. Naskah siap direkam untuk Job {job_id}")
+            try:
+                if run_research(db, job) and run_verify(db, job):
+                    if run_script(db, job):
+                        typer.echo(f"Berhasil. Naskah siap direkam untuk Job {job_id}")
+                    else:
+                        typer.echo(f"Gagal di tahap penulisan naskah. Status: {job.status}")
                 else:
-                    typer.echo(f"Gagal di tahap penulisan naskah. Status: {job.status}")
-            else:
-                typer.echo(f"Riset/verifikasi tidak lolos. Status: {job.status}")
+                    typer.echo(f"Riset/verifikasi tidak lolos. Status: {job.status}")
+            except (BudgetExceeded, SearchQuotaExceeded) as exc:
+                typer.echo(f"Produksi dihentikan: {_limit_message(exc)}", err=True)
+                if release_unstarted_job(db, topic, job, STATUS_QUEUED):
+                    typer.echo("Topik dikembalikan ke antrean.", err=True)
+                else:
+                    typer.echo(f"Pekerjaan {job_id} disimpan di status {job.status}.", err=True)
+                break
     finally:
         db.close()
 

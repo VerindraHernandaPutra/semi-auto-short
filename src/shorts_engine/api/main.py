@@ -24,6 +24,8 @@ from shorts_engine.pipeline.script import run_script
 from shorts_engine.pipeline.topics import STATUS_QUEUED, generate_topics
 from shorts_engine.pipeline.verify import run_verify
 from shorts_engine.providers.factory import set_active_providers
+from shorts_engine.services.costs import BudgetExceeded, SearchQuotaExceeded
+from shorts_engine.services.jobs import release_unstarted_job
 
 app = FastAPI(title="Shorts Engine Web UI", version="2.1")
 
@@ -62,9 +64,13 @@ def background_produce():
         db.add(job)
         db.commit()
 
-        if run_research(db, job):
-            if run_verify(db, job):
-                run_script(db, job)
+        try:
+            if run_research(db, job):
+                if run_verify(db, job):
+                    run_script(db, job)
+        except (BudgetExceeded, SearchQuotaExceeded):
+            # Budget or quota refused the work; an unstarted job goes back to the queue.
+            release_unstarted_job(db, topic, job, STATUS_QUEUED)
     finally:
         db.close()
 

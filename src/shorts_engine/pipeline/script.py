@@ -2,12 +2,14 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from shorts_engine.config import get_config
+from shorts_engine.config import AppConfig, get_config
 from shorts_engine.db.models import Claim, Job, Script
 from shorts_engine.domain.schemas import ScriptClaimCheck, ScriptOutput
 from shorts_engine.domain.state_machine import JobState, transition_job_state
 from shorts_engine.pipeline.claim_validation import numeric_facts_are_supported
 from shorts_engine.providers.factory import get_llm_provider, is_mock_provider
+from shorts_engine.providers.llm.base import BaseLLMProvider, LLMProviderError
+from shorts_engine.services.costs import check_budget, track_costs
 
 
 def _claim_text_for_ids(claim_ids: list[str], claims_by_id: dict[str, Claim]) -> str:
@@ -54,9 +56,14 @@ def _validate_references(script_data: ScriptOutput, claims_by_id: dict[str, Clai
     return None
 
 
-def run_script(db: Session, job: Job) -> bool:
-    config = get_config()
-    llm = get_llm_provider()
+def run_script(
+    db: Session,
+    job: Job,
+    llm: BaseLLMProvider | None = None,
+    config: AppConfig | None = None,
+) -> bool:
+    config = config or get_config()
+    llm = llm or get_llm_provider()
 
     if is_mock_provider(llm):
         transition_job_state(
@@ -67,6 +74,12 @@ def run_script(db: Session, job: Job) -> bool:
         )
         return False
 
+    check_budget(db, config, job.id)  # refused before any paid call; the job stays resumable
+    with track_costs(db, config, job.id, llm=llm):
+        return _write_script(db, job, llm, config)
+
+
+def _write_script(db: Session, job: Job, llm: BaseLLMProvider, config: AppConfig) -> bool:
     # Ambil hanya klaim yang lolos verifikasi
     verified_claims = (
         db.query(Claim).filter(Claim.job_id == job.id, Claim.status == "verified").all()
@@ -94,13 +107,8 @@ def run_script(db: Session, job: Job) -> bool:
 
     try:
         script_data = llm.generate_structured(prompt, ScriptOutput, model_heavy)
-    except Exception:
-        transition_job_state(
-            db,
-            job,
-            JobState.FAILED,
-            reason="Script generation provider failed or returned an invalid response",
-        )
+    except LLMProviderError as exc:
+        transition_job_state(db, job, JobState.FAILED, reason=f"Script generation failed: {exc}")
         return False
 
     claims_by_id = {claim.id: claim for claim in verified_claims}
@@ -142,13 +150,8 @@ def run_script(db: Session, job: Job) -> bool:
         )
         try:
             check = llm.generate_structured(prompt_check, ScriptClaimCheck, model_light)
-        except Exception:
-            transition_job_state(
-                db,
-                job,
-                JobState.FAILED,
-                reason="Script check provider failed or returned an invalid response",
-            )
+        except LLMProviderError as exc:
+            transition_job_state(db, job, JobState.FAILED, reason=f"Script check failed: {exc}")
             return False
         if check.status != "consistent":
             transition_job_state(

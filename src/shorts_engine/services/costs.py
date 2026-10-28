@@ -1,5 +1,6 @@
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -8,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from shorts_engine.config import AppConfig
 from shorts_engine.db.models import CostEntry, Topic
-from shorts_engine.providers.llm.base import LLMUsage
+from shorts_engine.providers.llm.base import BaseLLMProvider, LLMUsage
+from shorts_engine.providers.search.base import BaseSearchProvider, SearchUsage
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,16 @@ class BudgetExceeded(RuntimeError):
         self.limit_idr = limit_idr
 
 
+class SearchQuotaExceeded(RuntimeError):
+    """A search was refused because the monthly search-credit limit would be exceeded."""
+
+    def __init__(self, provider: str, used: int, limit: int):
+        super().__init__(f"{provider} credit limit reached: {used} of {limit} this month")
+        self.provider = provider
+        self.used = used
+        self.limit = limit
+
+
 @dataclass
 class BudgetStatus:
     month_idr: float
@@ -36,6 +48,7 @@ class BudgetStatus:
 
 @dataclass
 class OperationCost:
+    provider: str
     operation: str
     calls: int
     input_tokens: int
@@ -93,6 +106,53 @@ def make_usage_listener(
     return lambda usage: record_llm_usage(db, config, usage, job_id)
 
 
+def record_search_usage(
+    db: Session, config: AppConfig, usage: SearchUsage, job_id: str | None = None
+) -> CostEntry:
+    """Store the credits of one search. ``input_units`` holds credits; commits immediately."""
+    credit_usd = float(config.settings.get("search", {}).get("credit_usd", 0.0))
+    entry = CostEntry(
+        job_id=job_id,
+        provider=usage.provider,
+        model=None,
+        operation=usage.operation,
+        input_units=usage.credits,
+        output_units=0,
+        cost_usd=usage.credits * credit_usd,
+        cost_kind="actual",
+    )
+    db.add(entry)
+    db.commit()
+    return entry
+
+
+@contextmanager
+def track_costs(
+    db: Session,
+    config: AppConfig,
+    job_id: str | None = None,
+    *,
+    llm: BaseLLMProvider | None = None,
+    search: BaseSearchProvider | None = None,
+) -> Iterator[None]:
+    """Record every billed call made by the given providers, then restore their listeners."""
+    saved = (
+        getattr(llm, "usage_listener", None),
+        getattr(search, "usage_listener", None),
+    )
+    if llm is not None:
+        llm.usage_listener = make_usage_listener(db, config, job_id)
+    if search is not None:
+        search.usage_listener = lambda usage: record_search_usage(db, config, usage, job_id)
+    try:
+        yield
+    finally:
+        if llm is not None:
+            llm.usage_listener = saved[0]
+        if search is not None:
+            search.usage_listener = saved[1]
+
+
 def _month_bounds(now: datetime) -> tuple[datetime, datetime]:
     start = datetime(now.year, now.month, 1, tzinfo=UTC)
     end = (
@@ -142,12 +202,44 @@ def check_budget(
     return status
 
 
+def search_credits_this_month(
+    db: Session, provider: str = "tavily", now: datetime | None = None
+) -> int:
+    start, end = _month_bounds(now or datetime.now(UTC))
+    value = (
+        db.query(func.coalesce(func.sum(CostEntry.input_units), 0))
+        .filter(
+            CostEntry.provider == provider,
+            CostEntry.created_at >= start,
+            CostEntry.created_at < end,
+        )
+        .scalar()
+    )
+    return int(value or 0)
+
+
+def check_search_quota(
+    db: Session,
+    config: AppConfig,
+    needed: int = 0,
+    provider: str = "tavily",
+    now: datetime | None = None,
+) -> int:
+    """Raise SearchQuotaExceeded if ``needed`` more credits would pass the monthly limit."""
+    limit = config.settings.get("search", {}).get("monthly_credit_limit")
+    used = search_credits_this_month(db, provider, now)
+    if limit is not None and used + needed > int(limit):
+        raise SearchQuotaExceeded(provider, used, int(limit))
+    return used
+
+
 def cost_report(db: Session, config: AppConfig, now: datetime | None = None) -> CostReport:
     now = now or datetime.now(UTC)
     rate = float(config.settings["costs"]["usd_to_idr"])
     start, end = _month_bounds(now)
     rows = (
         db.query(
+            CostEntry.provider,
             CostEntry.operation,
             func.count(CostEntry.id),
             func.coalesce(func.sum(CostEntry.input_units), 0),
@@ -155,7 +247,7 @@ def cost_report(db: Session, config: AppConfig, now: datetime | None = None) -> 
             func.coalesce(func.sum(CostEntry.cost_usd), 0.0),
         )
         .filter(CostEntry.created_at >= start, CostEntry.created_at < end)
-        .group_by(CostEntry.operation)
+        .group_by(CostEntry.provider, CostEntry.operation)
         .order_by(func.sum(CostEntry.cost_usd).desc())
         .all()
     )
@@ -170,8 +262,8 @@ def cost_report(db: Session, config: AppConfig, now: datetime | None = None) -> 
     return CostReport(
         status=budget_status(db, config, now=now),
         operations=[
-            OperationCost(op, calls, int(tin), int(tout), float(usd) * rate)
-            for op, calls, tin, tout, usd in rows
+            OperationCost(provider, op, calls, int(tin), int(tout), float(usd) * rate)
+            for provider, op, calls, tin, tout, usd in rows
         ],
         unpriced_entries=unpriced,
         topics_queued=counts.get("queued", 0),

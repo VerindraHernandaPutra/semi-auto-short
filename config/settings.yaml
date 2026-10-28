@@ -48,3 +48,12 @@ speech:
 search:
   depth: "basic"  # basic = 1 Tavily credit per search, advanced = 2
   max_results: 3
+  credit_usd: 0.0  # free plan; set 0.008 if you move to pay-as-you-go
+  monthly_credit_limit: 900  # the free plan gives 1000; stop before it overflows
+
+research:
+  max_queries: 6  # SPEC 7.2: 3-6 queries
+  min_distinct_domains: 2  # the hook rule (SPEC 7.3 rule 5) needs two independent domains
+  max_sources: 6  # SPEC 7.2: the top 3-6 tier A/B pages
+  max_sources_per_domain: 2
+  max_chars_per_source: 12000  # about 3K tokens each; bounds the Sonnet extraction cost
