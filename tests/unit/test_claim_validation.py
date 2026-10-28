@@ -80,17 +80,15 @@ def test_source_tiers_match_exact_domains_and_subdomains_only():
     assert source_independence_domain("physics.caltech.edu", whitelist) == "caltech.edu"
 
 
-def test_unknown_provider_selection_is_rejected_without_falling_back_to_mock(
-    monkeypatch,
-):
-    monkeypatch.setattr(factory, "ACTIVE_LLM_PROVIDER", "anthropic")
-    monkeypatch.setattr(factory, "ACTIVE_SEARCH_PROVIDER", "tavily")
+def test_unknown_provider_selection_is_rejected_without_falling_back_to_mock():
+    factory.set_active_providers("anthropic", "tavily")
 
-    with pytest.raises(ValueError, match="Provider LLM tidak dikenal"):
+    with pytest.raises(ValueError, match="Provider llm tidak dikenal"):
         factory.set_active_providers("invalid", "mock")
 
-    assert factory.ACTIVE_LLM_PROVIDER == "anthropic"
-    assert factory.ACTIVE_SEARCH_PROVIDER == "tavily"
+    names = factory.active_provider_names()
+    assert names["llm"] == "anthropic"
+    assert names["search"] == "tavily"
 
 
 def test_mock_providers_drop_fact_verification_job(db_session, monkeypatch):

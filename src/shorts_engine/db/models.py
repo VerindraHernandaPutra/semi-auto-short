@@ -114,7 +114,7 @@ class CostEntry(Base):
     operation = Column(String, nullable=False)  # e.g., script_generation, claim_verification
     input_units = Column(Integer, default=0)
     output_units = Column(Integer, default=0)
-    cost_usd = Column(Float, default=0.0)
+    cost_usd = Column(Float, nullable=True)  # None = model has no configured price (unpriced)
     cost_kind = Column(String, default="actual")  # actual / estimated
     created_at = Column(DateTime(timezone=True), default=utc_now, index=True)
 

@@ -13,6 +13,7 @@ from shorts_engine.domain.schemas import TopicCandidate, TopicList, TopicPolicyC
 from shorts_engine.providers.factory import get_footage_provider, get_llm_provider
 from shorts_engine.providers.footage.base import BaseFootageProvider
 from shorts_engine.providers.llm.base import BaseLLMProvider
+from shorts_engine.services.costs import BudgetExceeded, check_budget, make_usage_listener
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +44,19 @@ class RefillReport:
 
 
 def _stem(word: str) -> str:
-    if word.endswith("ses") and len(word) > 4:
-        return word[:-2]
-    if word.endswith("s") and not word.endswith(("ss", "us")) and len(word) > 3:
-        return word[:-1]
+    """Cheap suffix stripping so 'landing', 'lands' and 'land' compare equal."""
+    if word.endswith("ing") and len(word) > 5:
+        word = word[:-3]
+    elif word.endswith("ed") and len(word) > 4:
+        word = word[:-2]
+    elif word.endswith("ses") and len(word) > 4:
+        word = word[:-2]
+    elif word.endswith("es") and len(word) > 4:
+        word = word[:-2]
+    elif word.endswith("s") and not word.endswith(("ss", "us")) and len(word) > 3:
+        word = word[:-1]
+    if word.endswith("e") and len(word) > 4:
+        word = word[:-1]
     return word
 
 
@@ -74,6 +84,26 @@ def find_duplicate(text: str, known_texts: list[str], threshold: float) -> str |
     return None
 
 
+def find_overused(text: str, overused: list[str], containment: float = 0.75) -> str | None:
+    """Return the overused topic that ``text`` restates, if any.
+
+    A candidate restates an overused topic when most of that topic's content words appear in it.
+    """
+    tokens = content_tokens(text)
+    for phrase in overused:
+        phrase_tokens = content_tokens(phrase)
+        if phrase_tokens and len(tokens & phrase_tokens) / len(phrase_tokens) >= containment:
+            return phrase
+    return None
+
+
+def is_generic_subject(subject: str, generic_subjects: list[str]) -> bool:
+    """True when the subject is empty or made only of broad words such as 'cat' or 'ocean'."""
+    tokens = content_tokens(subject)
+    generic = frozenset(token for word in generic_subjects for token in content_tokens(word))
+    return not tokens or tokens <= generic
+
+
 # --- prompts -------------------------------------------------------------------------------
 
 
@@ -86,6 +116,8 @@ def build_generation_prompt(
     series_counts: Counter,
 ) -> str:
     policy = config.topic_policy
+    overused = "\n".join(f"- {item}" for item in policy.get("overused_topics", [])) or "- (none)"
+    generic = ", ".join(policy.get("generic_subjects", [])) or "(none)"
     series_lines = "\n".join(
         f'- {item["name"]}: structure {item["structure"]}; hook pattern "{item["hook_pattern"]}"'
         for item in policy["series"]
@@ -106,6 +138,11 @@ Series (every topic belongs to exactly one):
 {series_lines}
 Forbidden subject areas (never propose these): {", ".join(policy["forbidden_topics"])}
 
+Overused topics that countless channels already cover. Never propose these or close variants:
+{overused}
+
+Too-broad subjects. A topic whose subject is only one of these words is rejected: {generic}
+
 Existing topics. Do not repeat or reword any of them:
 {known}
 
@@ -113,12 +150,17 @@ Queue balance so far. Favour categories and series that are underrepresented:
 categories: {dict(category_counts) or "none"}; series: {dict(series_counts) or "none"}
 
 Propose exactly {count} new topics. Rules:
-- Each topic must be specific and answerable within one short video, not a broad subject.
+- Be specific. Name a particular subject (one species, one object or one phenomenon) and one
+  narrow angle on it (a single behavior, mechanism or surprising detail). Prefer subjects that
+  popular science videos rarely cover, as long as they can still be filmed. Every topic needs a
+  different subject.
+- Each topic must be answerable within one short video, not a broad subject.
 - Pick subjects that commonly exist as stock video (animals, weather, water, fire, space, plants,
   insects). Avoid topics that need diagrams, microscope views, anatomy, or rare species.
 - Do not state scientific facts as certain; you are proposing ideas that will be fact-checked later.
-- footage_queries: 2 to 3 short queries describing visuals that stock sites really have.
-- Scores are integers from 1 to 10."""
+- footage_queries: 2 to 3 short queries that name the specific subject itself, so we can test
+  whether stock video of that exact subject exists.
+- Scores are integers from 1 to 10. Be critical: specificity and novelty of 8 or more are rare."""
 
 
 def build_policy_prompt(candidates: list[TopicCandidate], forbidden: list[str]) -> str:
@@ -175,22 +217,22 @@ def check_footage(
 def score_topic(
     candidate: TopicCandidate, category_counts: Counter, series_counts: Counter
 ) -> tuple[float, str]:
-    """Combine visual potential and hook surprise, plus a bonus for underused categories."""
-    base = (candidate.visual_potential_score + candidate.hook_surprise_score) / 2
-    category_bonus = (
-        1.0
-        if category_counts[candidate.category] <= min(category_counts.values(), default=0)
-        else 0.0
+    """Weighted blend of the four ratings, plus a bonus for underused categories and series."""
+    base = (
+        0.3 * candidate.visual_potential_score
+        + 0.3 * candidate.hook_surprise_score
+        + 0.2 * candidate.specificity_score
+        + 0.2 * candidate.novelty_score
     )
-    series_bonus = (
-        1.0 if series_counts[candidate.series] <= min(series_counts.values(), default=0) else 0.0
-    )
-    score = round(base + 0.5 * (category_bonus + series_bonus), 2)
+    category_bonus = category_counts[candidate.category] <= min(category_counts.values(), default=0)
+    series_bonus = series_counts[candidate.series] <= min(series_counts.values(), default=0)
+    diversity = 0.5 * (int(category_bonus) + int(series_bonus))
     reason = (
-        f"visual {candidate.visual_potential_score}, hook surprise "
-        f"{candidate.hook_surprise_score}; diversity bonus {0.5 * (category_bonus + series_bonus)}"
+        f"visual {candidate.visual_potential_score}, hook surprise {candidate.hook_surprise_score}, "
+        f"specificity {candidate.specificity_score}, novelty {candidate.novelty_score}; "
+        f"diversity bonus {diversity}; subject: {candidate.subject}"
     )
-    return score, reason
+    return round(base + diversity, 2), reason
 
 
 # --- queue refill --------------------------------------------------------------------------
@@ -229,6 +271,11 @@ def _process_batch(
     for item in config.topic_policy["series"]:
         series_counts.setdefault(item["name"], 0)
 
+    min_specificity = int(queue_settings.get("min_specificity", 7))
+    min_novelty = int(queue_settings.get("min_novelty", 6))
+    overused = list(config.topic_policy.get("overused_topics", []))
+    generic = list(config.topic_policy.get("generic_subjects", []))
+
     prompt = build_generation_prompt(
         config,
         load_style_guide(),
@@ -242,15 +289,28 @@ def _process_batch(
     rejected: dict[int, str] = {}
     series_names = {item["name"] for item in config.topic_policy["series"]}
     seen = list(known_texts)
+    seen_subjects: set[frozenset[str]] = set()
     for index, candidate in enumerate(candidates):
+        subject_key = content_tokens(candidate.subject)
         if candidate.category not in config.topic_policy["active_categories"]:
             rejected[index] = "unknown_category"
         elif candidate.series not in series_names:
             rejected[index] = "unknown_series"
+        elif is_generic_subject(candidate.subject, generic):
+            rejected[index] = f"generic_subject:{candidate.subject[:40]}"
+        elif (restated := find_overused(candidate.text, overused)) is not None:
+            rejected[index] = f"overused:{restated}"
+        elif subject_key in seen_subjects:
+            rejected[index] = f"duplicate_subject:{candidate.subject[:40]}"
+        elif candidate.specificity_score < min_specificity:
+            rejected[index] = f"low_specificity:{candidate.specificity_score}"
+        elif candidate.novelty_score < min_novelty:
+            rejected[index] = f"low_novelty:{candidate.novelty_score}"
         elif (match := find_duplicate(candidate.text, seen, threshold)) is not None:
             rejected[index] = f"duplicate_of:{match[:60]}"
         else:
             seen.append(candidate.text)
+            seen_subjects.add(subject_key)
 
     survivors = [i for i in range(len(candidates)) if i not in rejected]
     if survivors:
@@ -305,19 +365,27 @@ def refill_topic_queue(
     max_batches = int(queue_settings.get("max_batches", 3))
 
     report = RefillReport()
-    while report.batches < max_batches:
-        queued = db.query(Topic).filter(Topic.status == STATUS_QUEUED).count()
-        needed = target - queued
-        if needed <= 0:
-            break
-        # Ask for more than needed because some candidates are filtered out.
-        asked = min(batch_size, max(needed * 2, 4))
-        try:
-            report.queued += _process_batch(db, config, llm, footage, asked, report)
-        except Exception as exc:
-            db.rollback()
-            raise TopicGenerationError(f"topic refill failed: {exc}") from exc
-        report.batches += 1
+    previous_listener = llm.usage_listener
+    llm.usage_listener = make_usage_listener(db, config)  # topic costs have no job
+    try:
+        while report.batches < max_batches:
+            queued = db.query(Topic).filter(Topic.status == STATUS_QUEUED).count()
+            needed = target - queued
+            if needed <= 0:
+                break
+            check_budget(db, config)  # raises BudgetExceeded before any paid call
+            # Ask for more than needed because some candidates are filtered out.
+            asked = min(batch_size, max(needed * 2, 4))
+            try:
+                report.queued += _process_batch(db, config, llm, footage, asked, report)
+            except BudgetExceeded:
+                raise
+            except Exception as exc:
+                db.rollback()
+                raise TopicGenerationError(f"topic refill failed: {exc}") from exc
+            report.batches += 1
+    finally:
+        llm.usage_listener = previous_listener
     return report
 
 

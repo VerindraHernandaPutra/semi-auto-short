@@ -22,3 +22,62 @@ forbidden_topics:
   - dangerous_instructions
   - current_events
   - tragedies
+
+# Subjects covered by countless science channels. Proposals that restate one are rejected.
+overused_topics:
+  - cats landing on their feet
+  - birds flying in V formation
+  - ice floating on water
+  - soap bubbles rainbow colors
+  - octopus three hearts
+  - octopus changing color
+  - chameleon changing color
+  - goldfish three second memory
+  - lightning never strikes the same place twice
+  - why the sky is blue
+  - why the ocean is salty
+  - how rainbows form
+  - why we have seasons
+  - why leaves change color in autumn
+  - ants carrying many times their weight
+  - sharks never stop swimming
+  - camels storing water in humps
+  - bats are blind
+  - dolphins sleeping with half their brain
+  - flamingos standing on one leg
+  - zebra stripes
+  - starfish regrowing arms
+  - sea turtles returning to their birth beach
+  - owls rotating their heads
+  - hummingbirds hovering
+  - jellyfish have no brain
+  - venus flytrap catching flies
+  - why thunder follows lightning
+  - how bees make honey
+  - the great barrier reef
+
+# A topic whose subject uses only these words is too broad (e.g. "cat", "ocean").
+generic_subjects:
+  - animal
+  - bird
+  - cat
+  - cloud
+  - dog
+  - earth
+  - fire
+  - fish
+  - flower
+  - insect
+  - moon
+  - ocean
+  - plant
+  - rain
+  - sea
+  - sky
+  - snow
+  - space
+  - sun
+  - tree
+  - water
+  - weather
+  - wind

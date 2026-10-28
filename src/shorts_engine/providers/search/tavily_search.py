@@ -17,6 +17,11 @@ class TavilyProvider(BaseSearchProvider):
         self.client = TavilyClient(api_key=self.api_key)
         self.config = get_config()
         self.whitelist = self.config.source_whitelist
+        search_settings = self.config.settings.get("search", {})
+        self.search_depth = search_settings.get("depth", "basic")
+        self.max_results = int(search_settings.get("max_results", 3))
+        if self.search_depth not in ("basic", "advanced"):
+            raise ValueError(f"search.depth must be basic or advanced, got: {self.search_depth}")
 
     def _get_tier(self, domain: str) -> str:
         return classify_domain(domain, self.whitelist)
@@ -27,7 +32,10 @@ class TavilyProvider(BaseSearchProvider):
         for query in queries:
             try:
                 response = self.client.search(
-                    query=query, search_depth="advanced", include_raw_content=True, max_results=3
+                    query=query,
+                    search_depth=self.search_depth,
+                    include_raw_content=True,
+                    max_results=self.max_results,
                 )
 
                 for result in response.get("results", []):

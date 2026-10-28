@@ -9,7 +9,8 @@ def test_provider_settings_endpoint_is_reachable():
     response = client.get("/api/settings/providers")
 
     assert response.status_code == 200
-    assert response.json() == {"llm": "mock", "search": "mock"}
+    # Real services are the default; fakes only through --dry-run or an explicit override.
+    assert response.json() == {"llm": "anthropic", "search": "tavily"}
 
 
 def test_root_serves_dashboard():

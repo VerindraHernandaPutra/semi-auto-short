@@ -148,12 +148,10 @@ class ProviderSettings(BaseModel):
 
 @app.get("/api/settings/providers")
 def get_providers():
-    from shorts_engine.providers.factory import (
-        ACTIVE_LLM_PROVIDER,
-        ACTIVE_SEARCH_PROVIDER,
-    )
+    from shorts_engine.providers.factory import active_provider_names
 
-    return {"llm": ACTIVE_LLM_PROVIDER, "search": ACTIVE_SEARCH_PROVIDER}
+    names = active_provider_names()
+    return {"llm": names["llm"], "search": names["search"]}
 
 
 @app.post("/api/settings/providers")

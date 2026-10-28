@@ -14,7 +14,9 @@ class OllamaProvider(BaseLLMProvider):
         self.host = host
         self.default_model = default_model
 
-    def generate_structured(self, prompt: str, schema: type[T], model_name: str) -> T:
+    def generate_structured(
+        self, prompt: str, schema: type[T], model_name: str, effort: str | None = None
+    ) -> T:
         # Abaikan nama model dari config jika itu Claude, paksakan pakai Llama 3
         if "claude" in model_name:
             model_name = self.default_model

@@ -8,12 +8,15 @@ import uvicorn
 from alembic import command
 from alembic.config import Config
 from alembic.util.exc import CommandError
-from sqlalchemy import desc
+from sqlalchemy import create_engine, desc
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-from shorts_engine.config import ConfigError, validate_config_files
+from shorts_engine.config import ConfigError, get_config, validate_config_files
 from shorts_engine.db.base import (
     PROJECT_ROOT,
+    Base,
     SessionLocal,
     get_data_dir,
     get_database_path,
@@ -38,8 +41,26 @@ from shorts_engine.pipeline.topics import (
     refill_topic_queue,
 )
 from shorts_engine.pipeline.verify import run_verify
+from shorts_engine.providers.factory import use_mock_providers
+from shorts_engine.services.costs import BudgetExceeded, cost_report
 
 app = typer.Typer(help="Shorts Engine CLI - Produksi Video Otomatis")
+
+
+def _open_session(dry_run: bool):
+    """Real database normally; with --dry-run a throwaway in-memory one plus fake providers.
+
+    Fake topics and scripts must never land in the user's real queue, and nothing is billed.
+    """
+    if not dry_run:
+        return SessionLocal()
+    use_mock_providers()
+    engine = create_engine(
+        "sqlite://", poolclass=StaticPool, connect_args={"check_same_thread": False}
+    )
+    Base.metadata.create_all(engine)
+    typer.echo("Mode uji (--dry-run): layanan tiruan, database sementara, tanpa biaya.")
+    return sessionmaker(bind=engine)()
 
 
 def _migrate_to_head() -> None:
@@ -221,13 +242,21 @@ def backup(
 @app.command(name="topics")
 def topics_command(
     refill: bool = typer.Option(False, "--refill", help="Isi ulang antrean topik"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Pakai layanan tiruan, tanpa biaya"),
 ):
-    db = SessionLocal()
+    db = _open_session(dry_run)
     try:
         if refill:
             typer.echo("Menyiapkan topik baru...")
             try:
                 report = refill_topic_queue(db)
+            except BudgetExceeded as exc:
+                typer.echo(
+                    f"Anggaran habis ({exc.scope}): Rp{exc.spent_idr:,.0f} dari "
+                    f"Rp{exc.limit_idr:,.0f}. Antrean tidak diisi.",
+                    err=True,
+                )
+                raise typer.Exit(code=1) from exc
             except TopicGenerationError as exc:
                 typer.echo(f"Gagal mengisi antrean topik: {exc}", err=True)
                 raise typer.Exit(code=1) from exc
@@ -246,12 +275,47 @@ def topics_command(
         db.close()
 
 
+@app.command(name="costs")
+def costs_command():
+    """Tampilkan pemakaian biaya bulan ini dan rasio topik yang dibuang."""
+    db = SessionLocal()
+    try:
+        report = cost_report(db, get_config())
+        status = report.status
+        percent = 100 * status.month_idr / status.month_limit_idr if status.month_limit_idr else 0
+        typer.echo(
+            f"Biaya bulan ini: Rp{status.month_idr:,.0f} dari Rp{status.month_limit_idr:,.0f} "
+            f"({percent:.0f}%)"
+        )
+        if status.warning:
+            typer.echo("Peringatan: pemakaian sudah melewati 80% dari anggaran bulanan.")
+        for item in report.operations:
+            typer.echo(
+                f"  {item.operation}: {item.calls} panggilan, "
+                f"{item.input_tokens}/{item.output_tokens} token, Rp{item.cost_idr:,.1f}"
+            )
+        if report.unpriced_entries:
+            typer.echo(
+                f"Catatan: {report.unpriced_entries} panggilan tanpa harga di settings.yaml "
+                "(belum dihitung)."
+            )
+        handled = report.topics_used + report.topics_rejected
+        ratio = f"{100 * report.topics_rejected / handled:.0f}%" if handled else "-"
+        typer.echo(
+            f"Topik: antre {report.topics_queued}, dipakai {report.topics_used}, "
+            f"dibuang {report.topics_rejected} (rasio dibuang {ratio})."
+        )
+    finally:
+        db.close()
+
+
 @app.command(name="produce")
 def produce_command(
     count: int = typer.Option(1, "--count", min=1, help="Jumlah naskah yang ingin diproduksi"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Pakai layanan tiruan, tanpa biaya"),
 ):
     """Jalankan pipeline dari topik sampai naskah siap rekam."""
-    db = SessionLocal()
+    db = _open_session(dry_run)
     try:
         for index in range(count):
             typer.echo(f"\n--- Memulai Produksi #{index + 1} ---")

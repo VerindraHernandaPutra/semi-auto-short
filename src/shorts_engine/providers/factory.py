@@ -1,3 +1,5 @@
+from shorts_engine.config import get_config
+
 from .asr.base import BaseASRProvider
 from .asr.mock import MockASRProvider
 from .asr.whisper_provider import WhisperASRProvider
@@ -17,11 +19,25 @@ LLM_PROVIDERS = {"mock", "ollama", "anthropic"}
 SEARCH_PROVIDERS = {"mock", "tavily"}
 FOOTAGE_PROVIDERS = {"mock", "pixabay", "pexels"}
 ASR_PROVIDERS = {"mock", "whisper"}
+VALID_PROVIDERS = {
+    "llm": LLM_PROVIDERS,
+    "search": SEARCH_PROVIDERS,
+    "footage": FOOTAGE_PROVIDERS,
+    "asr": ASR_PROVIDERS,
+}
 
-ACTIVE_LLM_PROVIDER = "mock"  # Opsi: mock, ollama, anthropic
-ACTIVE_SEARCH_PROVIDER = "mock"  # Opsi: mock, tavily
-ACTIVE_FOOTAGE_PROVIDER = "pixabay"  # Opsi: mock, pixabay, pexels
-ACTIVE_ASR_PROVIDER = "whisper"
+# Runtime overrides (dry-run, API settings). Without one, config/settings.yaml decides.
+_overrides: dict[str, str] = {}
+
+
+def active_provider_names() -> dict[str, str]:
+    """Provider names in effect: runtime overrides first, then ``providers`` in settings.yaml."""
+    configured = get_config().settings.get("providers", {})
+    names = {kind: _overrides.get(kind) or configured.get(kind) for kind in VALID_PROVIDERS}
+    for kind, name in names.items():
+        if name not in VALID_PROVIDERS[kind]:
+            raise ValueError(f"Provider {kind} tidak dikenal atau belum diatur: {name}")
+    return names
 
 
 def set_active_providers(
@@ -30,59 +46,56 @@ def set_active_providers(
     footage: str | None = None,
     asr: str | None = None,
 ):
-    if llm not in LLM_PROVIDERS:
-        raise ValueError(f"Provider LLM tidak dikenal: {llm}")
-    if search not in SEARCH_PROVIDERS:
-        raise ValueError(f"Provider search tidak dikenal: {search}")
-    if footage is not None and footage not in FOOTAGE_PROVIDERS:
-        raise ValueError(f"Provider footage tidak dikenal: {footage}")
-    if asr is not None and asr not in ASR_PROVIDERS:
-        raise ValueError(f"Provider ASR tidak dikenal: {asr}")
+    chosen = {"llm": llm, "search": search, "footage": footage, "asr": asr}
+    for kind, name in chosen.items():
+        if name is not None and name not in VALID_PROVIDERS[kind]:
+            raise ValueError(f"Provider {kind} tidak dikenal: {name}")
+    _overrides.update({kind: name for kind, name in chosen.items() if name is not None})
 
-    global ACTIVE_LLM_PROVIDER, ACTIVE_SEARCH_PROVIDER
-    global ACTIVE_FOOTAGE_PROVIDER, ACTIVE_ASR_PROVIDER
-    ACTIVE_LLM_PROVIDER = llm
-    ACTIVE_SEARCH_PROVIDER = search
-    if footage is not None:
-        ACTIVE_FOOTAGE_PROVIDER = footage
-    if asr is not None:
-        ACTIVE_ASR_PROVIDER = asr
+
+def use_mock_providers() -> None:
+    """Route every service to its local fake (used by --dry-run); costs nothing."""
+    _overrides.update({kind: "mock" for kind in VALID_PROVIDERS})
+
+
+def reset_provider_overrides() -> None:
+    _overrides.clear()
 
 
 def get_llm_provider() -> BaseLLMProvider:
-    if ACTIVE_LLM_PROVIDER == "anthropic":
+    if active_provider_names()["llm"] == "anthropic":
         return AnthropicProvider()
-    if ACTIVE_LLM_PROVIDER == "ollama":
+    if active_provider_names()["llm"] == "ollama":
         return OllamaProvider()
-    if ACTIVE_LLM_PROVIDER == "mock":
+    if active_provider_names()["llm"] == "mock":
         return MockLLMProvider()
-    raise ValueError(f"Provider LLM tidak dikenal: {ACTIVE_LLM_PROVIDER}")
+    raise ValueError(f"Provider LLM tidak dikenal: {active_provider_names()['llm']}")
 
 
 def get_search_provider() -> BaseSearchProvider:
-    if ACTIVE_SEARCH_PROVIDER == "tavily":
+    if active_provider_names()["search"] == "tavily":
         return TavilyProvider()
-    if ACTIVE_SEARCH_PROVIDER == "mock":
+    if active_provider_names()["search"] == "mock":
         return MockSearchProvider()
-    raise ValueError(f"Provider search tidak dikenal: {ACTIVE_SEARCH_PROVIDER}")
+    raise ValueError(f"Provider search tidak dikenal: {active_provider_names()['search']}")
 
 
 def get_footage_provider() -> BaseFootageProvider:
-    if ACTIVE_FOOTAGE_PROVIDER == "pixabay":
+    if active_provider_names()["footage"] == "pixabay":
         return PixabayProvider()
-    if ACTIVE_FOOTAGE_PROVIDER == "pexels":
+    if active_provider_names()["footage"] == "pexels":
         return PexelsProvider()
-    if ACTIVE_FOOTAGE_PROVIDER == "mock":
+    if active_provider_names()["footage"] == "mock":
         return MockFootageProvider()
-    raise ValueError(f"Provider footage tidak dikenal: {ACTIVE_FOOTAGE_PROVIDER}")
+    raise ValueError(f"Provider footage tidak dikenal: {active_provider_names()['footage']}")
 
 
 def get_asr_provider() -> BaseASRProvider:
-    if ACTIVE_ASR_PROVIDER == "whisper":
+    if active_provider_names()["asr"] == "whisper":
         return WhisperASRProvider()
-    if ACTIVE_ASR_PROVIDER == "mock":
+    if active_provider_names()["asr"] == "mock":
         return MockASRProvider()
-    raise ValueError(f"Provider ASR tidak dikenal: {ACTIVE_ASR_PROVIDER}")
+    raise ValueError(f"Provider ASR tidak dikenal: {active_provider_names()['asr']}")
 
 
 def is_mock_provider(provider: object) -> bool:

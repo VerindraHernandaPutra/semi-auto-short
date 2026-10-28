@@ -1,5 +1,12 @@
 content_language: "en"
 
+# Real services by default. `--dry-run` swaps all of them for local fakes.
+providers:
+  llm: "anthropic"  # mock, ollama, anthropic
+  search: "tavily"  # mock, tavily
+  footage: "pixabay"  # mock, pixabay, pexels
+  asr: "whisper"  # mock, whisper
+
 models:
   heavy: "claude-sonnet-5-5"
   light: "claude-haiku-5-5"
@@ -8,6 +15,16 @@ costs:
   budget_monthly_idr: 100000
   budget_per_video_idr: 5000
   usd_to_idr: 15500
+
+# USD per million tokens. Verify against the provider's price list before trusting budgets.
+# Haiku 5.5 prices apply to prompts up to 100K tokens; this project's prompts stay far below.
+pricing:
+  claude-haiku-5-5:
+    input: 0.10
+    output: 0.50
+  claude-sonnet-5-5:
+    input: 2.00
+    output: 10.00
 
 verification:
   min_verified_claims: 3
@@ -18,6 +35,8 @@ topic_queue:
   min_footage_candidates: 3
   min_clip_seconds: 5
   duplicate_similarity: 0.5  # word-overlap (Jaccard) at or above which two topics are duplicates
+  min_specificity: 7  # self-rated 1-10; ideas below this are too broad
+  min_novelty: 6  # self-rated 1-10; ideas below this are too commonly covered
   generation_batch_size: 12
   max_batches: 3
 

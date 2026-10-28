@@ -89,6 +89,10 @@ class AppConfig(BaseModel):
             raise ValueError("series must be a list")
         if not isinstance(policy.get("forbidden_topics"), list):
             raise ValueError("forbidden_topics must be a list")
+        for key in ("overused_topics", "generic_subjects"):
+            values = policy.get(key, [])
+            if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
+                raise ValueError(f"{key} must be a list of strings")
         return policy
 
 

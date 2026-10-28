@@ -221,3 +221,45 @@ def test_doctor_passes_for_cpu_mode_when_required_media_tools_exist(tmp_path, mo
         next(check for check in report.checks if check.name == "FFmpeg libass/subtitles").status
         == "OK"
     )
+
+
+def test_real_providers_are_the_default_and_dry_run_switches_all_to_mock():
+    from shorts_engine.providers import factory
+
+    assert factory.active_provider_names() == {
+        "llm": "anthropic",
+        "search": "tavily",
+        "footage": "pixabay",
+        "asr": "whisper",
+    }
+
+    factory.use_mock_providers()
+
+    assert set(factory.active_provider_names().values()) == {"mock"}
+
+
+def test_unknown_provider_in_settings_fails_loudly(monkeypatch):
+    from shorts_engine.providers import factory
+
+    config = config_module.get_config()
+    config.settings["providers"] = {**config.settings["providers"], "llm": "gpt-nine"}
+    monkeypatch.setattr(factory, "get_config", lambda: config)
+
+    with pytest.raises(ValueError, match="llm"):
+        factory.active_provider_names()
+
+
+def test_topics_dry_run_uses_fakes_and_a_throwaway_database_not_the_real_one(monkeypatch):
+    import shorts_engine.cli as cli_module
+
+    def real_database_must_not_be_opened():
+        raise AssertionError("dry-run opened the real database")
+
+    monkeypatch.setattr(cli_module, "SessionLocal", real_database_must_not_be_opened)
+
+    result = runner.invoke(app, ["topics", "--refill", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "--dry-run" in result.output
+    assert "Topik masuk antrean:" in result.output
+    assert "mock" in result.output  # fake topics were produced

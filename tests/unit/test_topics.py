@@ -20,7 +20,7 @@ from shorts_engine.pipeline.topics import (
     refill_topic_queue,
 )
 from shorts_engine.providers.footage.base import BaseFootageProvider, FootageCandidate
-from shorts_engine.providers.llm.base import BaseLLMProvider, LLMProviderError
+from shorts_engine.providers.llm.base import BaseLLMProvider, LLMProviderError, LLMUsage
 
 
 @pytest.fixture
@@ -38,6 +38,9 @@ def candidate(text, category="animals", series="Strange Creatures", visual=8, su
         category=category,
         series=series,
         hook_idea=f"hook for {text}",
+        subject=kw.pop("subject", " ".join(text.split()[-2:])),
+        specificity_score=kw.pop("specificity", 8),
+        novelty_score=kw.pop("novelty", 7),
         visual_potential_score=visual,
         hook_surprise_score=surprise,
         footage_queries=kw.pop("footage_queries", ["query a", "query b"]),
@@ -56,6 +59,8 @@ class FakeLLM(BaseLLMProvider):
 
     def generate_structured(self, prompt, schema, model_name, effort=None):
         self.prompts.append(prompt)
+        if self.usage_listener is not None:  # a real provider reports every billed call
+            self.usage_listener(LLMUsage("fake", model_name, schema.__name__, 1000, 500))
         if schema is TopicList:
             return TopicList(topics=self.batches.pop(0) if self.batches else [])
         if schema is TopicPolicyCheck:
@@ -156,14 +161,21 @@ def test_candidate_without_a_policy_verdict_is_rejected_not_queued(db_session):
 
 
 def test_reworded_duplicate_of_existing_topic_is_rejected(db_session):
-    db_session.add(Topic(id="old", text="How an octopus changes color", category="ocean"))
+    db_session.add(Topic(id="old", text="How a dung beetle rolls a ball", category="animals"))
     db_session.commit()
-    llm = FakeLLM([[candidate("Why octopuses change color"), candidate("How owls fly silently")]])
+    llm = FakeLLM(
+        [
+            [
+                candidate("Why dung beetles roll balls", subject="dung beetle"),
+                candidate("How owls fly silently"),
+            ]
+        ]
+    )
 
     report = refill(db_session, llm, FakeFootage())
 
     assert [t.text for t in report.queued] == ["How owls fly silently"]
-    assert report.rejected[0][0] == "Why octopuses change color"
+    assert report.rejected[0][0] == "Why dung beetles roll balls"
     assert report.rejected[0][1].startswith("duplicate_of:")
 
 
@@ -292,3 +304,140 @@ def test_module_exposes_no_hardcoded_indonesian_prompts():
 
     source = inspect.getsource(topics_module)
     assert "Hasilkan" not in source and "Bagaimana Gurita" not in source
+
+
+def test_overused_topic_is_rejected_even_when_reworded(db_session):
+    llm = FakeLLM(
+        [
+            [
+                candidate("Why cats seem to land on their feet", subject="house cat reflex"),
+                candidate("How a mantis shrimp strikes", subject="mantis shrimp"),
+            ]
+        ]
+    )
+
+    report = refill(db_session, llm, FakeFootage())
+
+    assert [t.text for t in report.queued] == ["How a mantis shrimp strikes"]
+    assert report.rejected[0][1].startswith("overused:")
+
+
+def test_generic_subjects_are_rejected_without_calling_footage(db_session):
+    llm = FakeLLM([[candidate("Something about the ocean", subject="ocean")]] * 3)
+    footage = FakeFootage()
+
+    report = refill(db_session, llm, footage)
+
+    assert report.rejected[0][1] == "generic_subject:ocean"
+    assert footage.queries == []
+
+
+def test_low_specificity_and_low_novelty_are_rejected(db_session):
+    llm = FakeLLM(
+        [
+            [
+                candidate("How a barn owl hunts", subject="barn owl", specificity=5),
+                candidate("How a pistol shrimp snaps", subject="pistol shrimp", novelty=3),
+            ]
+        ]
+        * 3
+    )
+
+    report = refill(db_session, llm, FakeFootage())
+
+    reasons = {reason for _, reason in report.rejected}
+    assert {"low_specificity:5", "low_novelty:3"} <= reasons
+
+
+def test_two_topics_about_the_same_subject_in_one_batch_keep_only_the_first(db_session):
+    llm = FakeLLM(
+        [
+            [
+                candidate("How a mantis shrimp strikes", subject="mantis shrimp"),
+                candidate("What a mantis shrimp sees", subject="Mantis Shrimp"),
+            ]
+        ]
+    )
+
+    report = refill(db_session, llm, FakeFootage(), target=2)
+
+    assert [t.text for t in report.queued] == ["How a mantis shrimp strikes"]
+    assert any(reason.startswith("duplicate_subject:") for _, reason in report.rejected)
+
+
+def test_prompt_demands_specific_subjects_and_lists_overused_topics():
+    from collections import Counter
+
+    prompt = build_generation_prompt(get_config(), "STYLE", 4, [], Counter(), Counter())
+
+    assert "Name a particular subject" in prompt
+    assert "cats landing on their feet" in prompt  # overused list is shown to the model
+    assert "ocean" in prompt  # generic subjects are listed
+    assert "name the specific subject itself" in prompt
+
+
+def test_stemming_matches_inflections():
+    assert content_tokens("cats landing on their feet") >= content_tokens("cat lands")
+    assert content_tokens("Octopuses changes colors") == content_tokens("octopus change color")
+
+
+def test_more_specific_and_novel_topics_score_higher():
+    from collections import Counter
+
+    from shorts_engine.pipeline.topics import score_topic
+
+    plain = candidate("Plain topic", specificity=7, novelty=6)
+    sharp = candidate("Sharp topic", specificity=10, novelty=9)
+
+    plain_score, _ = score_topic(plain, Counter(), Counter())
+    sharp_score, reason = score_topic(sharp, Counter(), Counter())
+
+    assert sharp_score > plain_score
+    assert "specificity 10" in reason
+
+
+def test_refill_records_the_cost_of_each_llm_call(db_session):
+    from shorts_engine.db.models import CostEntry
+
+    refill(db_session, FakeLLM([[candidate("How owls fly silently")]]), FakeFootage())
+
+    operations = [e.operation for e in db_session.query(CostEntry).order_by(CostEntry.id)]
+    assert operations == ["TopicList", "TopicPolicyCheck"]
+    assert all(e.job_id is None for e in db_session.query(CostEntry))  # topic costs have no job
+
+
+def test_cost_is_kept_even_when_a_batch_fails_after_the_llm_calls(db_session):
+    from shorts_engine.db.models import CostEntry
+    from shorts_engine.providers.footage.base import FootageProviderError
+
+    footage = FakeFootage(error=FootageProviderError("fake", "down"))
+
+    with pytest.raises(TopicGenerationError):
+        refill(db_session, FakeLLM([[candidate("How owls fly silently")]]), footage)
+
+    assert db_session.query(CostEntry).count() == 2  # money was spent, so it stays recorded
+    assert db_session.query(Topic).count() == 0  # but the half-finished batch is rolled back
+
+
+def test_refill_is_refused_before_any_llm_call_when_the_budget_is_spent(db_session):
+    from shorts_engine.db.models import CostEntry
+    from shorts_engine.services.costs import BudgetExceeded
+
+    db_session.add(CostEntry(provider="anthropic", operation="x", cost_usd=100.0))
+    db_session.commit()
+    llm = FakeLLM([[candidate("How owls fly silently")]])
+
+    with pytest.raises(BudgetExceeded):
+        refill(db_session, llm, FakeFootage())
+
+    assert llm.prompts == []
+
+
+def test_refill_restores_the_previous_usage_listener(db_session):
+    llm = FakeLLM([[candidate("How owls fly silently")]])
+    sentinel = lambda usage: None  # noqa: E731
+    llm.usage_listener = sentinel
+
+    refill(db_session, llm, FakeFootage())
+
+    assert llm.usage_listener is sentinel

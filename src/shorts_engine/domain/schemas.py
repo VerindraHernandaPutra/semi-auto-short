@@ -52,6 +52,21 @@ class TopicCandidate(BaseModel):
     visual_potential_score: int = Field(
         ..., description="How well common stock video could illustrate it, from 1 to 10"
     )
+    subject: str = Field(
+        ...,
+        description=(
+            "The specific named subject: a particular species, object or phenomenon, "
+            "e.g. 'mantis shrimp'. Never a broad word such as 'bird' or 'ocean'."
+        ),
+    )
+    specificity_score: int = Field(
+        ...,
+        description="How narrow and concrete the topic is, from 1 (broad trivia) to 10. Be critical.",
+    )
+    novelty_score: int = Field(
+        ...,
+        description="How rarely popular science videos cover it, from 1 to 10. Be critical.",
+    )
     hook_surprise_score: int = Field(
         ..., description="How surprising and curiosity-provoking the hook is, from 1 to 10"
     )
