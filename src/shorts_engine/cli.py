@@ -301,7 +301,7 @@ def process_audio(
 
 @app.command(name="process-footage")
 def process_footage(job_id: str = typer.Argument(..., help="ID Job yang akan diproses")):
-    """Mencari dan mengunduh video background dari Pexels."""
+    """Mencari dan mengunduh video background dari provider footage aktif."""
     db = SessionLocal()
     try:
         job = _get_job_or_exit(db, job_id)

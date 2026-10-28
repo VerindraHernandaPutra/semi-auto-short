@@ -241,7 +241,7 @@ def collect_doctor_report(
 
     configured_keys = [
         key
-        for key in ("ANTHROPIC_API_KEY", "TAVILY_API_KEY", "PEXELS_API_KEY")
+        for key in ("ANTHROPIC_API_KEY", "TAVILY_API_KEY", "PIXABAY_API_KEY", "PEXELS_API_KEY")
         if environment.get(key)
     ]
     checks.append(

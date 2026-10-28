@@ -24,13 +24,10 @@ def run_footage_selection(db: Session, job: Job) -> bool:
 
     for idx, segment in enumerate(script.segments):
         query = segment.get("visual_suggestion", "nature")
-        videos = provider.search_videos(query, per_page=1)
+        candidates = provider.search_videos(query, per_page=1)
 
-        if videos and videos[0].get("video_files"):
-            video_files = videos[0]["video_files"]
-            # Cari resolusi HD atau gunakan yang pertama
-            best_file = next((f for f in video_files if f.get("quality") == "hd"), video_files[0])
-            download_url = best_file["link"]
+        if candidates:
+            download_url = candidates[0].download_url
 
             file_name = f"seg_{idx}.mp4"
             file_path = job_dir / file_name
@@ -46,7 +43,7 @@ def run_footage_selection(db: Session, job: Job) -> bool:
                     with open(file_path, "w") as f:
                         f.write("mock video file")
             else:
-                # Real: Unduh video asli dari Pexels
+                # Real: unduh video asli dari provider footage aktif
                 try:
                     with httpx.Client(timeout=30.0) as client:
                         resp = client.get(download_url)
