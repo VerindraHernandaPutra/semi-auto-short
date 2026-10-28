@@ -7,6 +7,7 @@ from shorts_engine.db.models import Claim, Job, JobEvent, Script, Source, Topic
 from shorts_engine.domain.schemas import (
     ClaimCandidate,
     ClaimSupportCheck,
+    CorroborationResult,
     ExtractedClaims,
     ScriptClaimCheck,
     ScriptOutput,
@@ -129,6 +130,8 @@ class VerifiedFakeLLM:
             return ExtractedClaims(claims=self.candidates)
         if schema is ClaimSupportCheck:
             return ClaimSupportCheck(status="supports", reason="Supported by quote")
+        if schema is CorroborationResult:
+            return CorroborationResult(found=False, supporting_quote="", reason="not stated")
         raise AssertionError(f"Unexpected schema requested: {schema.__name__}")
 
 
@@ -233,9 +236,14 @@ def test_hook_claim_from_one_domain_is_not_verified(db_session, monkeypatch, tmp
     monkeypatch.setattr(verify_module, "get_search_provider", lambda: object())
 
     assert run_verify(db_session, job) is False
-    hook_claim = db_session.query(Claim).filter(Claim.is_hook.is_(True)).one()
+    # is_hook means "confirmed by two independent domains", so the failed candidate is not flagged.
+    hook_claim = (
+        db_session.query(Claim)
+        .filter(Claim.reject_reason == "hook_requires_two_independent_domains")
+        .one()
+    )
     assert hook_claim.status == "rejected"
-    assert hook_claim.reject_reason == "hook_requires_two_independent_domains"
+    assert hook_claim.is_hook is False
     assert job.status == JobState.DROPPED.value
 
 
@@ -266,6 +274,7 @@ def test_script_requires_known_claim_ids_and_factual_segment_references():
         quote_match_score=1.0,
         support_check="supports",
         status="verified",
+        is_hook=True,
     )
 
     assert _validate_references(script_data, {"claim_1": verified_claim}) is None
@@ -299,6 +308,7 @@ def test_factual_script_cannot_introduce_unsupported_number():
         quote_match_score=1.0,
         support_check="supports",
         status="verified",
+        is_hook=True,
     )
 
     assert "number or unit" in _validate_references(script_data, {"claim_1": verified_claim})
@@ -361,6 +371,7 @@ def test_valid_script_is_audited_before_job_becomes_recordable(db_session, monke
                 quote_match_score=1.0,
                 support_check="supports",
                 status="verified",
+                is_hook=index == 1,
             )
         )
     db_session.commit()

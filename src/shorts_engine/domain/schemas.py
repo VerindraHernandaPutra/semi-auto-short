@@ -115,6 +115,15 @@ class ClaimSupportCheck(BaseModel):
     reason: str = Field(..., description="Brief reason")
 
 
+class CorroborationResult(BaseModel):
+    found: bool = Field(..., description="Whether the source text explicitly states the claim")
+    supporting_quote: str = Field(
+        default="",
+        description="Exact quote copied from the source text that states the claim; empty if none",
+    )
+    reason: str = Field(..., description="Brief reason")
+
+
 class ScriptClaimCheck(BaseModel):
     status: Literal["consistent", "overstated", "unsupported"] = Field(
         ..., description="Whether the script statement is supported by its claims"

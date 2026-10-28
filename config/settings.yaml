@@ -29,6 +29,8 @@ pricing:
 verification:
   min_verified_claims: 3
   quote_similarity_threshold: 0.92
+  hook_min_domains: 2  # SPEC 7.3 rule 5
+  max_hook_candidates: 2  # claims tried as the hook before giving up
 
 topic_queue:
   min_queue_size: 10

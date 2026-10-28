@@ -28,6 +28,8 @@ def _validate_references(script_data: ScriptOutput, claims_by_id: dict[str, Clai
 
     if not script_data.hook_claim_ids:
         return "Hook has no verified claim references"
+    if any(not claims_by_id[claim_id].is_hook for claim_id in script_data.hook_claim_ids):
+        return "Hook must rest on a claim confirmed by two independent sources"
 
     referenced_text = _claim_text_for_ids(script_data.hook_claim_ids, claims_by_id)
     if not numeric_facts_are_supported(script_data.hook, referenced_text):
@@ -93,11 +95,16 @@ def _write_script(db: Session, job: Job, llm: BaseLLMProvider, config: AppConfig
 
     transition_job_state(db, job, JobState.SCRIPTING, reason="Mulai penulisan naskah")
 
-    claims_text = "\n".join([f"- [{c.id}] {c.text}" for c in verified_claims])
+    claims_text = "\n".join(
+        f"- [{c.id}] {c.text}"
+        + (" [HOOK-ELIGIBLE: confirmed by two independent sources]" if c.is_hook else "")
+        for c in verified_claims
+    )
 
     prompt = f"""
     Tulis naskah video pendek sains (Shorts) berdasarkan fakta berikut HANYA. 
     Setiap kalimat faktual, termasuk hook, harus mencantumkan claim_id yang mendukungnya.
+    hook_claim_ids HANYA boleh berisi klaim bertanda HOOK-ELIGIBLE.
     Tandai kalimat tanpa fakta sebagai framing tanpa claim_id.
     Fakta:
     {claims_text}

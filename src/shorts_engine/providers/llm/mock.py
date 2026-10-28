@@ -84,6 +84,8 @@ class MockLLMProvider(BaseLLMProvider):
                     )
                 ]
             )
+        elif schema.__name__ == "CorroborationResult":
+            return schema(found=False, supporting_quote="", reason="Mock: no corroboration")
         elif schema.__name__ == "ClaimSupportCheck":
             return schema(status="supports", reason="Mock verification passed")
 
