@@ -21,7 +21,7 @@ from shorts_engine.pipeline.research import run_research
 from shorts_engine.pipeline.script import run_script
 
 # Import Pipeline
-from shorts_engine.pipeline.topics import generate_topics
+from shorts_engine.pipeline.topics import STATUS_QUEUED, generate_topics
 from shorts_engine.pipeline.verify import run_verify
 from shorts_engine.providers.factory import set_active_providers
 
@@ -41,7 +41,12 @@ def background_produce():
     """Fungsi yang berjalan di belakang layar untuk memproduksi naskah dari awal."""
     db = SessionLocal()
     try:
-        topic = db.query(Topic).filter(Topic.status == "candidate").first()
+        topic = (
+            db.query(Topic)
+            .filter(Topic.status == STATUS_QUEUED)
+            .order_by(desc(Topic.score))
+            .first()
+        )
         if not topic:
             # Generate topik baru jika kosong
             topics = generate_topics(db, count=1)

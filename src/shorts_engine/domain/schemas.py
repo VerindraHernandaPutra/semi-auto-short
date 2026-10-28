@@ -2,27 +2,31 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+# Field descriptions are sent to the model as part of the output schema, so they stay in
+# English: the model mirrors their language, and video content must follow content_language.
+
 
 class ScriptSegment(BaseModel):
-    text: str = Field(..., description="Teks narasi untuk segmen ini")
+    text: str = Field(..., description="Narration text for this segment")
     claim_ids: list[str] = Field(
-        default_factory=list, description="Daftar ID klaim yang mendukung, kosongkan jika framing"
+        default_factory=list,
+        description="IDs of the verified claims backing this segment; empty for framing",
     )
     kind: Literal["factual", "framing"] = Field(
-        "factual", description="Apakah segmen ini faktual atau sekadar transisi/framing"
+        "factual", description="Whether the segment states facts or is only a transition/framing"
     )
-    visual_suggestion: str = Field(..., description="Saran visual untuk pencarian footage")
+    visual_suggestion: str = Field(..., description="Visual idea used to search for stock footage")
 
 
 class ScriptOutput(BaseModel):
-    title_working: str = Field(..., description="Judul sementara")
-    hook: str = Field(..., description="Kalimat pembuka (maks 2 detik)")
+    title_working: str = Field(..., description="Working title")
+    hook: str = Field(..., description="Opening sentence (about 2 seconds when spoken)")
     hook_claim_ids: list[str] = Field(
         default_factory=list,
         description="Verified claim IDs that support every factual statement in the hook",
     )
-    segments: list[ScriptSegment] = Field(..., description="Potongan naskah utama")
-    ending: str = Field(..., description="Kalimat penutup yang tenang")
+    segments: list[ScriptSegment] = Field(..., description="Main body segments of the script")
+    ending: str = Field(..., description="Calm closing line")
     ending_kind: Literal["factual", "framing"] = Field(
         "framing", description="Whether the ending contains a factual statement"
     )
@@ -30,35 +34,59 @@ class ScriptOutput(BaseModel):
         default_factory=list,
         description="Verified claim IDs supporting a factual ending",
     )
-    estimated_duration_s: int = Field(..., description="Estimasi durasi naskah dalam detik (35-55)")
-    story_structure: str = Field(..., description="Struktur cerita dari panduan")
-    series: str = Field(..., description="Nama seri")
-    episode_number: int | None = Field(None, description="Nomor episode jika ada")
+    estimated_duration_s: int = Field(
+        ..., description="Estimated spoken duration of the script in seconds (35-55)"
+    )
+    story_structure: str = Field(..., description="Story structure taken from the style guide")
+    series: str = Field(..., description="Series name")
+    episode_number: int | None = Field(None, description="Episode number, if known")
 
 
 class TopicCandidate(BaseModel):
-    text: str = Field(..., description="Topik spesifik (misal: Bagaimana gurita mengubah warna)")
-    category: str = Field(
-        ..., description="Kategori topik (misal: animals, ocean, everyday_phenomena)"
+    text: str = Field(
+        ..., description="Specific topic, e.g. 'How an octopus changes color in a split second'"
     )
-    series: str = Field(..., description="Nama seri yang cocok")
-    hook_idea: str = Field(..., description="Ide kalimat pembuka")
-    visual_potential_score: int = Field(..., description="Skor potensi visual 1-10")
+    category: str = Field(..., description="One of the allowed topic categories")
+    series: str = Field(..., description="Name of the series that fits the topic")
+    hook_idea: str = Field(..., description="Idea for the opening sentence")
+    visual_potential_score: int = Field(
+        ..., description="How well common stock video could illustrate it, from 1 to 10"
+    )
+    hook_surprise_score: int = Field(
+        ..., description="How surprising and curiosity-provoking the hook is, from 1 to 10"
+    )
+    footage_queries: list[str] = Field(
+        ...,
+        description="2 to 3 short English stock-footage search queries, always in English",
+    )
 
 
 class TopicList(BaseModel):
     topics: list[TopicCandidate]
 
 
+class TopicPolicyVerdict(BaseModel):
+    index: int = Field(..., description="Index of the candidate topic being judged")
+    violated_categories: list[str] = Field(
+        default_factory=list,
+        description="Forbidden categories the topic falls under; empty if it is acceptable",
+    )
+    reason: str = Field(..., description="Brief reason")
+
+
+class TopicPolicyCheck(BaseModel):
+    verdicts: list[TopicPolicyVerdict]
+
+
 class SearchQueries(BaseModel):
-    queries: list[str] = Field(..., description="Daftar 3-6 query pencarian bahasa Inggris")
+    queries: list[str] = Field(..., description="3 to 6 English web search queries")
 
 
 class ClaimCandidate(BaseModel):
-    text: str = Field(..., description="Teks klaim faktual")
-    supporting_quote: str = Field(..., description="Kutipan persis dari teks sumber")
-    source_id: str = Field(..., description="ID sumber yang mendukung")
-    is_hook: bool = Field(default=False, description="Apakah ini klaim utama untuk hook?")
+    text: str = Field(..., description="Text of the factual claim")
+    supporting_quote: str = Field(..., description="Exact quote copied from the source text")
+    source_id: str = Field(..., description="ID of the source that supports the claim")
+    is_hook: bool = Field(default=False, description="Whether this is the main claim for the hook")
 
 
 class ExtractedClaims(BaseModel):
@@ -67,9 +95,9 @@ class ExtractedClaims(BaseModel):
 
 class ClaimSupportCheck(BaseModel):
     status: Literal["supports", "partial", "no"] = Field(
-        ..., description="Apakah kutipan mendukung klaim secara eksplisit?"
+        ..., description="Does the quote explicitly support the claim?"
     )
-    reason: str = Field(..., description="Alasan singkat")
+    reason: str = Field(..., description="Brief reason")
 
 
 class ScriptClaimCheck(BaseModel):

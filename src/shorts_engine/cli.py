@@ -32,7 +32,11 @@ from shorts_engine.pipeline.footage import run_footage_selection
 from shorts_engine.pipeline.render import run_rendering
 from shorts_engine.pipeline.research import run_research
 from shorts_engine.pipeline.script import run_script
-from shorts_engine.pipeline.topics import generate_topics
+from shorts_engine.pipeline.topics import (
+    STATUS_QUEUED,
+    TopicGenerationError,
+    refill_topic_queue,
+)
 from shorts_engine.pipeline.verify import run_verify
 
 app = typer.Typer(help="Shorts Engine CLI - Produksi Video Otomatis")
@@ -221,14 +225,23 @@ def topics_command(
     db = SessionLocal()
     try:
         if refill:
-            typer.echo("Menghasilkan topik baru...")
-            new_topics = generate_topics(db, count=3)
-            typer.echo(f"Berhasil menambahkan {len(new_topics)} topik baru.")
-        else:
-            typer.echo("Antrean Topik Saat Ini:")
-            topics_in_db = db.query(Topic).filter(Topic.status == "candidate").all()
-            for topic in topics_in_db:
-                typer.echo(f"  - [{topic.category}] {topic.text}")
+            typer.echo("Menyiapkan topik baru...")
+            try:
+                report = refill_topic_queue(db)
+            except TopicGenerationError as exc:
+                typer.echo(f"Gagal mengisi antrean topik: {exc}", err=True)
+                raise typer.Exit(code=1) from exc
+            typer.echo(
+                f"Topik masuk antrean: {len(report.queued)}. Topik dibuang: {len(report.rejected)}."
+            )
+            for text, reason in report.rejected:
+                typer.echo(f"  dibuang ({reason}): {text}")
+        queued = (
+            db.query(Topic).filter(Topic.status == STATUS_QUEUED).order_by(desc(Topic.score)).all()
+        )
+        typer.echo(f"Antrean Topik Saat Ini ({len(queued)}):")
+        for topic in queued:
+            typer.echo(f"  - [{topic.score}] [{topic.category}] {topic.text}")
     finally:
         db.close()
 
@@ -242,7 +255,12 @@ def produce_command(
     try:
         for index in range(count):
             typer.echo(f"\n--- Memulai Produksi #{index + 1} ---")
-            topic = db.query(Topic).filter(Topic.status == "candidate").first()
+            topic = (
+                db.query(Topic)
+                .filter(Topic.status == STATUS_QUEUED)
+                .order_by(desc(Topic.score))
+                .first()
+            )
             if not topic:
                 typer.echo(
                     "Antrean topik kosong. Jalankan `shorts topics --refill` terlebih dahulu."

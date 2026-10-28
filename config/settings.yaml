@@ -16,8 +16,16 @@ verification:
 topic_queue:
   min_queue_size: 10
   min_footage_candidates: 3
+  min_clip_seconds: 5
+  duplicate_similarity: 0.5  # word-overlap (Jaccard) at or above which two topics are duplicates
+  generation_batch_size: 12
+  max_batches: 3
 
 speech:
   words_per_second: 2.6
   target_duration_min: 35
   target_duration_max: 55
+
+search:
+  depth: "basic"  # basic = 1 Tavily credit per search, advanced = 2
+  max_results: 3
