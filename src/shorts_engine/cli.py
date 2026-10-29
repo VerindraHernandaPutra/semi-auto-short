@@ -37,7 +37,9 @@ from shorts_engine.pipeline.topics import (
     TopicGenerationError,
     refill_topic_queue,
 )
+from shorts_engine.pipeline.voice import synthesize_narration
 from shorts_engine.providers.factory import use_mock_providers
+from shorts_engine.providers.voice.base import VoiceProviderError
 from shorts_engine.services.costs import (
     BudgetExceeded,
     SearchQuotaExceeded,
@@ -444,11 +446,59 @@ def process_render(
             raise typer.Exit(code=1)
         typer.echo(f"Memulai rendering video untuk Job: {job_id}...")
         if run_rendering(db, job, str(audio_path)):
-            typer.echo(f"Video selesai: data/jobs/{job_id}/final_video.mp4")
+            typer.echo(
+                f"Video selesai: {get_data_dir() / 'jobs' / job_id / 'render' / 'final.mp4'}"
+            )
         else:
             db.refresh(job)
             typer.echo(f"Gagal merender. Detail: {job.error}", err=True)
             raise typer.Exit(code=1)
+    finally:
+        db.close()
+
+
+@app.command(name="finish")
+def finish_command(
+    job_id: str = typer.Argument(..., help="ID Job yang naskahnya sudah Anda rekam"),
+    audio_path: Path | None = typer.Argument(None, help="File rekaman suara Anda (wav, mp3, m4a)"),
+    clone: bool = typer.Option(False, "--clone", help="Pakai klon suara Anda, tanpa rekaman"),
+):
+    """Dari rekaman (atau klon suara) sampai video jadi: audio, subtitle, footage, render."""
+    db = SessionLocal()
+    try:
+        job = _get_job_or_exit(db, job_id)
+        if job.status != JobState.AWAITING_VOICE.value:
+            typer.echo(f"Job {job_id} tidak menunggu rekaman (status: {job.status}).", err=True)
+            raise typer.Exit(code=1)
+        if clone == (audio_path is not None):
+            typer.echo("Beri file rekaman, atau pakai --clone (tidak keduanya).", err=True)
+            raise typer.Exit(code=1)
+        if clone:
+            typer.echo("Membuat suara klon (menit pertama bisa lama)...")
+            try:
+                audio_path = synthesize_narration(db, job)
+            except VoiceProviderError as exc:
+                typer.echo(f"Berhenti di tahap ini. Detail: {exc}", err=True)
+                raise typer.Exit(code=1) from exc
+        steps = [
+            ("Memproses suara", lambda: run_audio_alignment(db, job, str(audio_path))),
+            ("Memilih footage", lambda: run_footage_selection(db, job)),
+            ("Merender video", lambda: run_rendering(db, job)),
+        ]
+        for label, step in steps:
+            typer.echo(f"{label}...")
+            if not step():
+                db.refresh(job)
+                typer.echo(f"Berhenti di tahap ini. Detail: {job.error}", err=True)
+                raise typer.Exit(code=1)
+        folder = get_data_dir() / "jobs" / job_id / "render"
+        typer.echo(f"\nVideo siap Anda tonton: {folder / 'final.mp4'}")
+        typer.echo(f"Judul dan deskripsi: {folder / 'description.txt'}")
+        if clone:
+            typer.echo(
+                "\nPenting: suara ini buatan komputer. Saat mengunggah, centang pilihan konten "
+                "yang diubah atau sintetis di YouTube Studio."
+            )
     finally:
         db.close()
 

@@ -133,7 +133,17 @@ def test_stage_ends_in_review_when_the_video_is_ready(db_session):
         "c1.mp4",
     )
     (folder / "footage" / "footage_plan.json").write_text(
-        json.dumps([{"shot": 1, "file": "footage/c1.mp4", "needed_s": 5.3, "loop": True}])
+        json.dumps(
+            [
+                {
+                    "shot": 1,
+                    "file": "footage/c1.mp4",
+                    "needed_s": 5.3,
+                    "loop": True,
+                    "attribution": "Video by A from Pixabay",
+                }
+            ]
+        )
     )
     heard = [{"word": w, "start": i * 0.5, "end": i * 0.5 + 0.4}
              for i, w in enumerate("Jupiter is shrinking now and slowly".split())]  # fmt: skip

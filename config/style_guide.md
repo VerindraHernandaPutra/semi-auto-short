@@ -68,7 +68,7 @@ Episode labels in titles: `Strange Creatures #4`. The label goes at the end of t
 ## Titles and descriptions
 
 - **Title:** under 60 characters, plain and specific, series label at the end.
-- **Description:** two-sentence summary, then "Sources:" with each source title and URL, then "Footage:" with Pexels credits, then 3–5 hashtags including `#Shorts`.
+- **Description:** two-sentence summary, then "Sources:" with each source title and URL, then "Footage:" with the stock footage credits (Pixabay) and a note that the visuals are illustrative, then 3–5 hashtags including `#Shorts`.
 
 ---
 

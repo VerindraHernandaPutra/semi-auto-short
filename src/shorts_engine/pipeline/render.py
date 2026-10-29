@@ -11,6 +11,7 @@ from shorts_engine.db.base import get_data_dir
 from shorts_engine.db.models import Job, Script
 from shorts_engine.domain.state_machine import JobState, transition_job_state
 from shorts_engine.pipeline.audio import measure_loudness, probe_audio
+from shorts_engine.pipeline.description import write_description
 from shorts_engine.pipeline.footage import probe_video
 from shorts_engine.pipeline.subtitles import SubtitleError, create_subtitles
 
@@ -162,6 +163,7 @@ def run_rendering(
         report = check_result(
             job.id, final, probe_audio(job_dir / "audio" / "narration.wav").duration_s
         )
+        write_description(db, job, job_dir, config)
         (job_dir / "render" / "report.json").write_text(
             json.dumps(report, indent=2), encoding="utf-8"
         )

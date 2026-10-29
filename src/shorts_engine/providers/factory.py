@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 from shorts_engine.config import get_config
 
 from .asr.base import BaseASRProvider
@@ -14,6 +17,7 @@ from .llm.ollama_provider import OllamaProvider
 from .search.base import BaseSearchProvider
 from .search.mock import MockSearchProvider
 from .search.tavily_search import TavilyProvider
+from .voice.chatterbox import ChatterboxVoiceProvider
 
 LLM_PROVIDERS = {"mock", "ollama", "anthropic"}
 SEARCH_PROVIDERS = {"mock", "tavily"}
@@ -101,6 +105,22 @@ def get_asr_provider() -> BaseASRProvider:
     if active_provider_names()["asr"] == "mock":
         return MockASRProvider()
     raise ValueError(f"Provider ASR tidak dikenal: {active_provider_names()['asr']}")
+
+
+def get_voice_provider() -> ChatterboxVoiceProvider:
+    """The cloned-voice provider. Its Python environment comes from VOICE_PYTHON (.env)."""
+    settings = get_config().settings.get("voice", {})
+    root = Path(__file__).resolve().parents[3]
+    reference = Path(settings.get("reference", "data/voice/reference.wav"))
+    python = os.getenv("VOICE_PYTHON")
+    return ChatterboxVoiceProvider(
+        python=Path(python) if python else None,
+        reference=reference if reference.is_absolute() else root / reference,
+        exaggeration=float(settings.get("exaggeration", 0.5)),
+        cfg_weight=float(settings.get("cfg_weight", 0.5)),
+        gap_s=float(settings.get("gap_s", 0.35)),
+        timeout_s=int(settings.get("timeout_s", 3600)),
+    )
 
 
 def is_mock_provider(provider: object) -> bool:

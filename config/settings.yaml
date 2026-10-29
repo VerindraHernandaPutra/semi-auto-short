@@ -50,6 +50,15 @@ speech:
   target_duration_min: 35
   target_duration_max: 55
 
+voice:
+  # recorded = you record the script yourself; clone = your cloned voice (finish --clone).
+  # The clone runs in its own Python environment: set VOICE_PYTHON in .env to its python.exe.
+  reference: "data/voice/reference.wav"  # 20-30 s of your own voice, not committed
+  exaggeration: 0.5
+  cfg_weight: 0.5
+  gap_s: 0.35
+  timeout_s: 3600  # the first run also downloads the model (~3 GB)
+
 audio:
   min_duration_s: 20
   max_duration_s: 60
@@ -65,7 +74,11 @@ footage:
   required_tags_any: [space, stars, galaxy, universe, astronomy, planet, telescope, nebula, jupiter, mars, moon, sun, comet, asteroid, observatory]
   # Tags that mark fiction. Pixabay tags are written by uploaders and can mislead, so a clip
   # with any of these words is not used for a fact video.
-  avoid_tags: [fantasy, fiction, alien, ufo, spaceship, cartoon, anime, magic, dragon, christmas]
+  avoid_tags: [fantasy, fiction, alien, ufo, spaceship, cartoon, anime, magic, dragon, christmas, globe, world, global, international, network, technology, internet, digital, hologram, city, asteroid, meteorite, land]
+
+description:
+  visuals_note: "Visuals are illustrative stock footage, not mission imagery."
+  hashtags: ["#Shorts", "#Space", "#Astronomy", "#Science"]
 
 render:
   encoder: "libx264"  # libx264 (CPU, safest) or h264_nvenc (GPU)
