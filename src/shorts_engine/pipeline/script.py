@@ -10,7 +10,7 @@ from shorts_engine.db.base import get_data_dir
 from shorts_engine.db.models import Claim, Job, Script, Topic
 from shorts_engine.domain.schemas import ScriptClaimCheck, ScriptOutput
 from shorts_engine.domain.state_machine import JobState, transition_job_state
-from shorts_engine.pipeline.claim_validation import unsupported_numeric_facts
+from shorts_engine.pipeline.claim_validation import claim_key, unsupported_numeric_facts
 from shorts_engine.pipeline.script_rules import (
     count_second_person,
     count_words,
@@ -23,7 +23,7 @@ from shorts_engine.pipeline.script_rules import (
     word_budget,
 )
 from shorts_engine.providers.factory import get_llm_provider, is_mock_provider
-from shorts_engine.providers.llm.base import BaseLLMProvider, LLMProviderError
+from shorts_engine.providers.llm.base import BaseLLMProvider, LLMOutputError, LLMProviderError
 from shorts_engine.services.costs import check_budget, track_costs
 
 logger = logging.getLogger(__name__)
@@ -155,6 +155,7 @@ def build_script_prompt(
     claims: list[Claim],
     style_guide: str,
     feedback: list[str] | None = None,
+    previous: ScriptOutput | None = None,
 ) -> str:
     speech = config.settings["speech"]
     script_cfg = config.settings.get("script", {})
@@ -179,6 +180,13 @@ def build_script_prompt(
             "\nYour previous draft was rejected. Write a new draft that fixes every point:\n"
             f"{describe(feedback)}\n"
         )
+        if previous is not None:
+            words = sum(count_words(text) for text in _spoken_parts(previous))
+            retry += (
+                f"\nThat draft ({words} words) for reference. Keep every sentence the points do "
+                f"not touch, change only what they require, and keep the total between {low} and "
+                f"{high} words:\n{_draft_text(previous)}\n"
+            )
     return f"""You write the narration for a short educational science video that a person will read
 aloud. Write all spoken text in the language with code "{language}".
 
@@ -207,6 +215,10 @@ Rules:
 - Never add numbers, units, names or details that the claims do not contain, and never state
   anything stronger than a claim does. Words such as "only", "always", "never", "most" and
   superlatives are forbidden unless a claim says them.
+- Put several short sentences into one segment instead of adding segments beyond the count
+  given below.
+- Name the subject (planet, animal, object) only in a sentence whose cited claim names it. In the
+  other sentences say "it", "this planet" or a similar plain word.
 - Length: {low} to {high} words in total across the hook, segments and ending, spoken at
   {speech["words_per_second"]} words per second. Aim for about {(low + high) // 2} words: drafts
   below {low} words fail the length limit, and drafts usually come out shorter than planned. Use {min_segments} to {max_segments} body segments.
@@ -216,6 +228,16 @@ Rules:
 - visual_suggestion names concrete things stock footage of the subject can show. Avoid diagrams,
   text overlays, microscope views and anatomy.
 {retry}"""
+
+
+def _draft_text(draft: ScriptOutput) -> str:
+    """A draft as plain lines, with the claim ids each part cites."""
+    hook_ids = ", ".join(draft.hook_claim_ids)
+    lines = [f"Title: {draft.title_working}", f"Hook [{hook_ids}]: {draft.hook}"]
+    for index, segment in enumerate(draft.segments, start=1):
+        lines.append(f"Segment {index} [{', '.join(segment.claim_ids)}]: {segment.text}")
+    lines.append(f"Ending [{', '.join(draft.ending_claim_ids)}]: {draft.ending}")
+    return "\n".join(lines)
 
 
 def _save_attempts(job_id: str, attempts: list[dict]) -> None:
@@ -230,6 +252,39 @@ def _save_attempts(job_id: str, attempts: list[dict]) -> None:
 def next_episode_number(db: Session, series: str) -> int:
     done = db.query(Job).filter(Job.series == series, Job.episode_number.isnot(None)).count()
     return done + 1
+
+
+def claim_material_words(claims: list[Claim]) -> int:
+    """Words in the distinct verified claims (a claim confirmed by several sources counts once)."""
+    distinct = {claim_key(claim.text): claim.text for claim in claims}
+    return sum(count_words(text) for text in distinct.values())
+
+
+def _unused_claims_hint(
+    script_data: ScriptOutput, claims_by_id: dict[str, Claim], missing_words: int, limit: int = 4
+) -> str:
+    """What to add when a draft is too short: verified claims it has not used, with their ids.
+
+    Claims that repeat one the draft already cites (a hook confirmed by several sources exists
+    once per source) are left out.
+    """
+    cited = {*script_data.hook_claim_ids, *script_data.ending_claim_ids}
+    for segment in script_data.segments:
+        cited.update(segment.claim_ids)
+    seen = {claim_key(claims_by_id[cid].text) for cid in cited if cid in claims_by_id}
+    options: list[str] = []
+    for claim_id, claim in claims_by_id.items():
+        key = claim_key(claim.text)
+        if key in seen:
+            continue
+        seen.add(key)
+        options.append(f"[{claim_id}] {claim.text}")
+        if len(options) == limit:
+            break
+    hint = f" Add at least {missing_words + 3} words."
+    if options:
+        hint += " Verified claims not used yet that you can add:\n  " + "\n  ".join(options)
+    return hint
 
 
 def script_problems(
@@ -261,6 +316,8 @@ def script_problems(
     )
     size_problem = length_problem(total_words, budget, speech["words_per_second"])
     if size_problem:
+        if total_words < budget[0]:
+            size_problem += _unused_claims_hint(script_data, claims_by_id, budget[0] - total_words)
         problems.append(size_problem)
 
     max_you = int(script_cfg.get("max_second_person_uses", 1))
@@ -276,6 +333,10 @@ def script_problems(
             problems.append(f'The {label} uses the forbidden phrase "{phrase}".')
         for word in find_unclaimed_overstatements(text, claims_text, overstated):
             problems.append(f'The {label} says "{word}" but no cited claim states it.')
+        if label == "title":
+            # Titles are written in Title Case, so every word would look like a name. The model
+            # check still compares the title with all verified claims.
+            continue
         for name in find_unsupported_names(text, claims_text):
             problems.append(f'The {label} names "{name}", which its cited claims do not mention.')
     return problems
@@ -349,6 +410,18 @@ def _write_script(db: Session, job: Job, llm: BaseLLMProvider, config: AppConfig
     if not any(claim.is_hook for claim in verified_claims):
         transition_job_state(db, job, JobState.DROPPED, reason="no_hook_eligible_claim")
         return False
+    material = claim_material_words(verified_claims)
+    needed = int(config.settings.get("script", {}).get("min_claim_words", 0))
+    if material < needed:
+        # A script can only use what the claims say, so no number of rewrites would reach the
+        # length; dropping now saves the cost of drafts that cannot succeed.
+        transition_job_state(
+            db,
+            job,
+            JobState.DROPPED,
+            reason=f"insufficient_material:{material}_words_of_{needed}",
+        )
+        return False
 
     topic = db.query(Topic).filter(Topic.id == job.topic_id).first()
     topic_text = topic.text if topic else ""
@@ -361,14 +434,36 @@ def _write_script(db: Session, job: Job, llm: BaseLLMProvider, config: AppConfig
 
     transition_job_state(db, job, JobState.SCRIPTING, reason="Mulai penulisan naskah")
     feedback: list[str] = []
+    previous: ScriptOutput | None = None
     last_problem = "unknown"
     attempts_log: list[dict] = []
     for attempt in range(max_rewrites + 1):
         if attempt:
             check_budget(db, config, job.id)  # a rewrite is a new paid stage
-        prompt = build_script_prompt(config, topic_text, verified_claims, style_guide, feedback)
+        prompt = build_script_prompt(
+            config, topic_text, verified_claims, style_guide, feedback, previous
+        )
         try:
             draft = llm.generate_structured(prompt, ScriptOutput, model_heavy)
+        except LLMOutputError as exc:
+            # The model answered but broke the schema: a rejected draft, not a broken service.
+            problem = (
+                f"The draft did not follow the required format ({exc}). Return every field of "
+                "the schema, including claim_ids for every segment."
+            )
+            attempts_log.append(
+                {
+                    "attempt": attempt + 1,
+                    "draft": None,
+                    "problems": [problem],
+                    "model_checks": [],
+                    "outcome": "rejected",
+                }
+            )
+            _save_attempts(job.id, attempts_log)
+            last_problem, feedback = problem, [problem]  # the last valid draft stays "previous"
+            logger.info("Script draft %d for %s broke the schema: %s", attempt + 1, job.id, exc)
+            continue
         except LLMProviderError as exc:
             transition_job_state(
                 db, job, JobState.FAILED, reason=f"Script generation failed: {exc}"
@@ -437,6 +532,7 @@ def _write_script(db: Session, job: Job, llm: BaseLLMProvider, config: AppConfig
 
         last_problem = problems[0]
         feedback = problems
+        previous = draft
         logger.info("Script draft %d for %s rejected: %s", attempt + 1, job.id, last_problem)
         if attempt < max_rewrites:
             transition_job_state(

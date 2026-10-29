@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
@@ -13,6 +14,7 @@ from shorts_engine.config import AppConfig, get_config
 from shorts_engine.db.base import get_data_dir
 from shorts_engine.db.models import Job, Script, Topic
 from shorts_engine.domain.state_machine import JobState, transition_job_state
+from shorts_engine.pipeline.clip_ranker import ClipError, ClipScorer
 from shorts_engine.pipeline.subtitles import align_script, script_tokens
 from shorts_engine.providers.factory import get_footage_provider
 from shorts_engine.providers.footage.base import (
@@ -27,6 +29,7 @@ DOWNLOAD_TIMEOUT_S = 60.0
 FFPROBE_TIMEOUT_S = 30
 CANDIDATES_PER_QUERY = 20
 TAIL_S = 0.3
+THUMBNAIL_MAX_BYTES = 3 * 1024 * 1024
 FILLER_WORDS = frozenset(
     "a an and at by for from in into is it its of on or over seen the through to up with "
     "close slow slowly view shot shots footage video clip image showing shows".split()
@@ -50,6 +53,7 @@ class Pick:
     query: str
     score: float
     loop: bool  # the clip is shorter than the shot and has to repeat
+    clip_probability: float | None = None  # how well the picture matches the shot (CLIP)
 
 
 def content_words(text: str) -> list[str]:
@@ -106,42 +110,111 @@ def shot_durations(parts: list[str], heard: list[dict]) -> list[float]:
     ]
 
 
+def fetch_thumbnail(
+    url: str, allowed_hosts: list[str], transport: httpx.BaseTransport | None = None
+) -> bytes | None:
+    """A candidate's preview picture, or None. HTTPS from an allowed host only, no redirects."""
+    parsed = urlparse(url or "")
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not any(
+        host == allowed or host.endswith(f".{allowed}") for allowed in allowed_hosts
+    ):
+        return None
+    try:
+        with httpx.Client(timeout=20.0, transport=transport) as client:
+            response = client.get(url, follow_redirects=False)
+    except httpx.HTTPError:
+        return None
+    if response.status_code != 200 or len(response.content) > THUMBNAIL_MAX_BYTES:
+        return None
+    return response.content
+
+
 def pick_footage(
     provider: BaseFootageProvider,
     shots: list[Shot],
     topic_text: str,
     settings: dict,
+    scorer: ClipScorer | None = None,
+    fetch: Callable[[str], bytes | None] | None = None,
 ) -> list[Pick | None]:
-    """Best clip per shot, never the same clip twice. A shot without a clip is None."""
+    """Best clip per shot, never the same clip twice. A shot without a clip is None.
+
+    With a ``scorer`` the candidates are judged by their picture (CLIP) against what the shot
+    asks for and against things it must not be; tags only narrow the field. Without one, or if
+    the model fails, tags alone decide.
+    """
     min_clip = float(settings.get("min_clip_seconds", 5))
     max_bytes = int(settings.get("max_clip_mb", 60)) * 1024 * 1024
     avoid = {w for tag in settings.get("avoid_tags", []) for w in content_words(tag)}
     required = {w for tag in settings.get("required_tags_any", []) for w in content_words(tag)}
     fallbacks = list(settings.get("fallback_queries", ["space", "stars"]))
+    clip = settings.get("clip", {})
+    pool_size = int(clip.get("candidates_per_shot", 16))
+    weakest = float(clip.get("weak_probability", 0.2))
+    negatives = list(clip.get("negatives", []))
     used: set[str] = set()
     picks: list[Pick | None] = []
     for shot in shots:
         wanted = set(content_words(shot.visual)) | set(content_words(topic_text))
+        pool: dict[str, tuple[FootageCandidate, float, str]] = {}
         best: Pick | None = None
         for query in query_attempts(shot.visual, topic_text, fallbacks):
             for cand in provider.search_videos(query, per_page=CANDIDATES_PER_QUERY):
                 key = f"{cand.provider}:{cand.asset_id}"
-                if key in used or cand.duration_s < min_clip:
+                if key in used or key in pool or cand.duration_s < min_clip:
                     continue
                 if cand.size_bytes and cand.size_bytes > max_bytes:
                     continue
                 score = relevance(cand, wanted, avoid, required)
                 if score < 0:
                     continue
+                pool[key] = (cand, score, query)
                 score += 0.5 if cand.duration_s >= shot.needed_s else 0.0
                 if best is None or score > best.score:
                     best = Pick(cand, query, score, cand.duration_s < shot.needed_s)
-            if best is not None and best.score >= 2:  # a good match; do not search wider
+            if scorer is None and best is not None and best.score >= 2:
+                break  # tags only: a good match, do not search wider
+            if scorer is not None and len(pool) >= pool_size:
                 break
+        if scorer is not None and pool:
+            seen = sorted(pool.values(), key=lambda item: -item[1])[:pool_size]
+            could_judge, chosen = _judge_by_picture(scorer, fetch, shot, seen, negatives, weakest)
+            if could_judge:
+                best = chosen  # None when every picture was a poor match: no clip beats a wrong one
         if best is not None:
             used.add(f"{best.candidate.provider}:{best.candidate.asset_id}")
         picks.append(best)
     return picks
+
+
+def _judge_by_picture(
+    scorer: ClipScorer,
+    fetch: Callable[[str], bytes | None] | None,
+    shot: Shot,
+    candidates: list[tuple[FootageCandidate, float, str]],
+    negatives: list[str],
+    weakest: float,
+) -> tuple[bool, Pick | None]:
+    """(could judge, best match). The match is None when every preview fits the shot poorly."""
+    images, kept = [], []
+    for cand, _score, query in candidates:
+        data = fetch(cand.thumbnail_url or "") if fetch else None
+        if data:
+            images.append(data)
+            kept.append((cand, query))
+    if not images:
+        return False, None
+    try:
+        probabilities = scorer.match_probabilities(f"a photo of {shot.visual}", negatives, images)
+    except ClipError as exc:
+        logger.warning("picture ranking skipped: %s", exc)
+        return False, None
+    probability, (cand, query) = max(zip(probabilities, kept, strict=True), key=lambda x: x[0])
+    if probability < weakest:
+        return True, None
+    fits = cand.duration_s >= shot.needed_s
+    return True, Pick(cand, query, probability + (0.05 if fits else 0.0), not fits, probability)
 
 
 def probe_video(path: Path) -> tuple[int, int, float]:
@@ -228,7 +301,16 @@ def run_footage_selection(
         for i, (segment, seconds) in enumerate(zip(script.segments, shot_seconds, strict=False))
     ]
     try:
-        picks = pick_footage(provider, shots, topic.text, settings)
+        hosts_for_pictures = list(settings.get("allowed_download_hosts", ["cdn.pixabay.com"]))
+        scorer = ClipScorer() if settings.get("clip", {}).get("enabled", True) else None
+        picks = pick_footage(
+            provider,
+            shots,
+            topic.text,
+            settings,
+            scorer=scorer,
+            fetch=lambda url: fetch_thumbnail(url, hosts_for_pictures, transport),
+        )
     except FootageProviderError as exc:
         transition_job_state(db, job, JobState.FAILED, reason=f"Pencarian footage gagal: {exc}")
         return False
@@ -265,6 +347,7 @@ def run_footage_selection(
                     "height": height,
                     "query": pick.query,
                     "score": pick.score,
+                    "clip_probability": pick.clip_probability,
                     "provider": cand.provider,
                     "asset_id": cand.asset_id,
                     "page_url": cand.page_url,

@@ -13,6 +13,7 @@ from shorts_engine.db.base import get_data_dir
 from shorts_engine.db.models import Job, Source, Topic
 from shorts_engine.domain.schemas import SearchQueries
 from shorts_engine.domain.state_machine import JobState, transition_job_state
+from shorts_engine.pipeline.outcomes import end_on_llm_error
 from shorts_engine.providers.factory import get_llm_provider, get_search_provider
 from shorts_engine.providers.llm.base import BaseLLMProvider, LLMProviderError
 from shorts_engine.providers.search.base import BaseSearchProvider, SearchProviderError
@@ -216,7 +217,7 @@ def run_research(
                 effort=LIGHT_EFFORT,
             )
         except LLMProviderError as exc:
-            transition_job_state(db, job, JobState.FAILED, reason=f"Gagal membuat query: {exc}")
+            end_on_llm_error(db, job, exc, "query generation")
             return False
         queries = clean_queries(generated.queries, max_queries)
         if not queries:

@@ -12,6 +12,7 @@ from shorts_engine.pipeline.description import (
     build_description,
     build_title,
     cited_claim_ids,
+    source_lines,
     write_description,
 )
 
@@ -71,7 +72,7 @@ def test_title_gets_the_series_label_only_when_it_fits(db_session):
 
     short = script
     short.check_results = {**script.check_results, "title_working": "Jupiter shrinks"}
-    assert build_title(short) == "Jupiter shrinks Everyone Gets This Wrong #1"
+    assert build_title(short) == "Jupiter shrinks | Everyone Gets This Wrong #1"
 
 
 def test_description_lists_only_sources_of_cited_claims_with_database_urls(db_session, tmp_path):
@@ -101,3 +102,33 @@ def test_description_file_is_written_next_to_the_video(db_session, tmp_path):
 
     assert path == tmp_path / "render" / "description.txt"
     assert path.read_text(encoding="utf-8").startswith("Title: ")
+
+
+def test_the_series_label_is_taken_out_of_the_working_title():
+    from shorts_engine.pipeline.description import clean_title
+
+    series = "Everyone Gets This Wrong"
+
+    assert clean_title("The Moon Is Receding From Earth: Everyone Gets This Wrong", series) == (
+        "The Moon Is Receding From Earth"
+    )
+    assert clean_title("Everyone Gets This Wrong - Venus #3", series) == "Venus"
+    assert clean_title("Plain Title", series) == "Plain Title"
+    assert clean_title("Plain Title", None) == "Plain Title"
+
+
+def test_every_source_that_states_a_cited_claim_is_credited(db_session):
+    job, script = make_job(db_session)
+    # the hook claim was confirmed by another source: same text, another claim row
+    db_session.add(
+        Claim(
+            id="c1b", job_id="job_d", source_ids=["s3"], text="c1", supporting_quote="c1",
+            quote_match_score=1.0, support_check="supports", status="verified",
+        )
+    )  # fmt: skip
+    db_session.commit()
+
+    lines = source_lines(db_session, job, script)
+
+    assert any("unused.example" in line for line in lines)  # s3 now backs the cited claim c1
+    assert lines[0].startswith("- NASA page")  # cited claims' own sources stay first

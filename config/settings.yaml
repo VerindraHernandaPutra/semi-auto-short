@@ -31,7 +31,7 @@ verification:
   quote_similarity_threshold: 0.92
   hook_min_domains: 2  # SPEC 7.3 rule 5
   max_hook_candidates: 4  # claims tried as the hook before giving up
-  max_claims_extracted: 12
+  max_claims_extracted: 18  # 12 was reached on the Moon topic; more room means more usable material
   corroboration_search: true  # search for a second source for each hook candidate
   max_corroboration_searches: 4  # at most one search (1 Tavily credit) per hook candidate
 
@@ -70,6 +70,18 @@ footage:
   max_clip_mb: 60
   allowed_download_hosts: ["cdn.pixabay.com"]
   fallback_queries: ["space", "stars"]
+  clip:
+    enabled: true  # judge clips by their picture (CLIP model, ~150 MB downloaded once), not by tags
+    candidates_per_shot: 16
+    weak_probability: 0.2  # below this nothing is used for the shot
+    # Things a clip must not be; a clip is picked when the shot's description beats all of these.
+    negatives:
+      - a cartoon or fantasy science fiction illustration
+      - a globe of planet Earth
+      - a landscape on Earth
+      - a city or buildings seen from the air
+      - a person
+      - an abstract digital network
   # A clip must carry at least one of these tags (the channel's field), whatever else it matches.
   required_tags_any: [space, stars, galaxy, universe, astronomy, planet, telescope, nebula, jupiter, mars, moon, sun, comet, asteroid, observatory]
   # Tags that mark fiction. Pixabay tags are written by uploaders and can mislead, so a clip
@@ -94,8 +106,17 @@ render:
   luma_target: 55  # dark clips are brightened towards this average (0-255)
   gamma_cap: 1.5
 
+quality:
+  lufs_min: -17.5
+  lufs_max: -14.5
+  max_sync_error_s: 0.12  # median gap between real speech starts and subtitle starts
+  max_black_s: 1.0
+  max_freeze_s: 3.0
+  min_luma: 25  # a shot darker than this (0-255) is flagged
+  min_clip_probability: 0.5  # a clip that matches its sentence worse than this is flagged
+
 branding:
-  channel_name: ""  # your channel name; when set it appears as a watermark and as a white pop-up
+  channel_name: "@NamaChannelAnda"  # placeholder: replace with your channel name (the web profile will set it)
   watermark: true
   popup_at_s: [3.0]  # seconds at which the white pop-up appears
   popup_seconds: 2.6
@@ -137,7 +158,10 @@ research:
   max_chars_per_source: 12000  # about 3K tokens each; bounds the Sonnet extraction cost
 
 script:
-  max_rewrites: 2  # SPEC 7.4: rewrite at most twice, then drop the topic
+  max_rewrites: 3  # SPEC 7.4 says twice; raised to three with the user's approval (ADR 0022)
+  # Words in the distinct verified claims below which a topic is dropped before any draft is paid for.
+  # Measured: a script uses 58-80% of that material; Venus had 67 words and could not reach 91.
+  min_claim_words: 100
   min_body_segments: 3
   max_body_segments: 5
   max_second_person_uses: 1  # style guide: address the viewer as "you" at most once

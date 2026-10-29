@@ -17,33 +17,33 @@ T = TypeVar("T", bound=BaseModel)
 
 # Distinct subjects so the duplicate filter never rejects consecutive mock topics.
 _MOCK_TOPICS = [
-    ("barn owl", "flies without making a sound"),
-    ("firefly", "makes its own light"),
-    ("camel spider", "hunts at night"),
-    ("orb weaver", "builds a web overnight"),
-    ("emperor penguin", "huddles through the winter"),
-    ("fruit bat", "finds food in the dark"),
-    ("moon jellyfish", "drifts without a brain"),
-    ("ice cube", "cracks when it hits warm water"),
-    ("long shadow", "stretches at sunset"),
-    ("popcorn kernel", "pops when heated"),
-    ("humpback whale", "sings across the ocean"),
-    ("fiddler crab", "waves one giant claw"),
-    ("window frost", "draws feathery patterns"),
-    ("candle flame", "points upward"),
-    ("woodpecker", "hammers without a headache"),
-    ("peacock spider", "performs a courtship dance"),
-    ("dung beetle", "rolls a ball in a straight line"),
-    ("mantis shrimp", "strikes at high speed"),
-    ("pistol shrimp", "snaps its claw"),
-    ("glass frog", "looks see-through"),
-    ("bombardier beetle", "sprays hot liquid"),
-    ("archerfish", "spits at insects"),
-    ("leafcutter ant", "farms fungus"),
-    ("sand dune", "slowly walks across the desert"),
+    ("Saturn's rings", "are slowly raining into the planet"),
+    ("Olympus Mons", "is the tallest volcano known"),
+    ("the Sun's corona", "is hotter than its surface"),
+    ("Jupiter's Great Red Spot", "has been shrinking"),
+    ("Enceladus", "sprays water into space"),
+    ("Io", "has hundreds of active volcanoes"),
+    ("Mars sunsets", "look blue"),
+    ("Neptune's winds", "are the fastest in the solar system"),
+    ("Titan", "has lakes of liquid methane"),
+    ("Uranus", "spins on its side"),
+    ("the Moon", "is drifting away from Earth"),
+    ("Europa", "hides an ocean under ice"),
+    ("Mercury", "has ice in its polar craters"),
+    ("Phobos", "is slowly falling toward Mars"),
+    ("Betelgeuse", "dimmed sharply in 2019"),
+    ("the Orion Nebula", "is a star nursery"),
+    ("Halley's Comet", "returns about every 76 years"),
+    ("meteor showers", "come from comet dust"),
+    ("the Andromeda Galaxy", "is approaching the Milky Way"),
+    ("sunspots", "are cooler than the surface around them"),
+    ("Callisto", "is covered in craters"),
+    ("Venus's clouds", "are made of sulfuric acid"),
+    ("Ceres", "has bright salt deposits"),
+    ("the Kuiper Belt", "lies beyond Neptune"),
 ]
-_MOCK_CATEGORIES = ["animals", "ocean", "everyday_phenomena"]
-_MOCK_SERIES = ["Strange Creatures", "Everyone Gets This Wrong", "Science at Home"]
+_MOCK_CATEGORIES = ["planets_and_moons", "stars_and_the_sun", "space_phenomena"]
+_MOCK_SERIES = ["Strange Worlds", "Everyone Gets This Wrong", "Cosmic Scale"]
 _mock_topic_counter = itertools.count()
 
 
@@ -55,6 +55,7 @@ class MockLLMProvider(BaseLLMProvider):
             return schema(
                 title_working="Mock Title",
                 hook="This is a mock hook.",
+                hook_claim_ids=["claim_1"],
                 segments=[
                     ScriptSegment(
                         text="This is a mock segment text.",
@@ -65,6 +66,7 @@ class MockLLMProvider(BaseLLMProvider):
                 ],
                 ending="This is a mock ending.",
                 ending_kind="framing",
+                ending_claim_ids=[],
                 estimated_duration_s=40,
                 story_structure="Mock structure",
                 series="Mock Series",

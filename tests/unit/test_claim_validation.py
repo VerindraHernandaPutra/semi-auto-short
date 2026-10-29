@@ -288,8 +288,9 @@ def test_script_requires_known_claim_ids_and_factual_segment_references():
         ],
         ending="A quiet ending.",
         ending_kind="framing",
+        ending_claim_ids=[],
         story_structure="observation-mechanism-conclusion",
-        series="Strange Creatures",
+        series="Strange Worlds",
         estimated_duration_s=40,
     )
     verified_claim = Claim(
@@ -323,8 +324,9 @@ def test_factual_script_cannot_introduce_unsupported_number():
         ],
         ending="A quiet ending.",
         ending_kind="framing",
+        ending_claim_ids=[],
         story_structure="observation-mechanism-conclusion",
-        series="Strange Creatures",
+        series="Strange Worlds",
         estimated_duration_s=40,
     )
     verified_claim = Claim(

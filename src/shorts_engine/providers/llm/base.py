@@ -17,6 +17,14 @@ class LLMProviderError(Exception):
         self.model = model
 
 
+class LLMOutputError(LLMProviderError):
+    """The model answered, but its output did not follow the requested schema.
+
+    The call worked and was billed; the content is unusable. A caller that writes drafts can treat
+    it as a rejected draft rather than as a broken service.
+    """
+
+
 @dataclass(frozen=True)
 class LLMUsage:
     """Token usage of one LLM call; ``operation`` is the output schema name."""

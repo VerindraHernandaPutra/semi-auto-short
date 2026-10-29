@@ -371,8 +371,9 @@ def hook_script(hook_ids):
         ],
         ending="A quiet ending.",
         ending_kind="framing",
+        ending_claim_ids=[],
         story_structure="observation-mechanism-conclusion",
-        series="Strange Creatures",
+        series="Strange Worlds",
         estimated_duration_s=40,
     )
 

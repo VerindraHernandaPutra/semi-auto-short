@@ -98,3 +98,30 @@ def test_a_run_that_takes_too_long_is_stopped(tmp_path, reference):
 
     with pytest.raises(VoiceProviderError, match="terlalu lama"):
         provider(slow, reference, timeout_s=1).synthesize(["Hi."], tmp_path / "v.wav")
+
+
+def test_abbreviations_are_spelled_out_and_do_not_end_a_sentence():
+    parts = [
+        "Cassini plunged into Saturn's atmosphere on Sept. 15, 2017.",
+        "Dr. Lee led the U.S. team.",
+    ]
+
+    assert to_sentences(parts) == [
+        "Cassini plunged into Saturn's atmosphere on September fifteenth, twenty seventeen.",
+        "Doctor Lee led the United States team.",
+    ]
+
+
+def test_a_day_after_a_month_is_read_as_an_ordinal_but_other_numbers_are_not():
+    assert to_spoken("on March 3, 2020") == "on March third, twenty twenty"
+    assert to_spoken("about 3 moons") == "about three moons"
+    assert to_spoken("May 45 meters") == "May forty-five meters"  # not a day of the month
+
+
+def test_spoken_words_match_what_the_voice_says_in_context():
+    from shorts_engine.pipeline.spoken import spoken_words
+
+    pairs = dict(spoken_words("It ended on Sept. 15, 2017."))
+
+    assert pairs["Sept."] == ["September"] and pairs["15,"] == ["fifteenth,"]
+    assert pairs["2017."] == ["twenty", "seventeen."]

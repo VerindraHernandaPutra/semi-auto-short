@@ -1,18 +1,19 @@
+# The channel covers space and astronomy (ADR 0023).
 active_categories:
-  - animals
-  - ocean
-  - everyday_phenomena
+  - planets_and_moons
+  - stars_and_the_sun
+  - space_phenomena
 
 series:
   - name: "Everyone Gets This Wrong"
     structure: "misconception -> fact -> reason"
     hook_pattern: "The hook fact, stated plainly."
-  - name: "Strange Creatures"
+  - name: "Strange Worlds"
     structure: "observation -> mechanism -> conclusion"
-    hook_pattern: "This animal does X. Here's how."
-  - name: "Science at Home"
-    structure: "question -> explanation -> consequence"
-    hook_pattern: "Why does X happen when you Y?"
+    hook_pattern: "The hook fact, stated plainly."
+  - name: "Cosmic Scale"
+    structure: "comparison -> measurement -> meaning"
+    hook_pattern: "The hook fact, stated plainly."
 
 forbidden_topics:
   - medical_advice
@@ -22,6 +23,9 @@ forbidden_topics:
   - dangerous_instructions
   - current_events
   - tragedies
+  - astrology
+  - ufos_and_alien_claims
+  - unconfirmed_discoveries
 
 # Subjects covered by countless science channels. Proposals that restate one are rejected.
 overused_topics:
@@ -55,6 +59,14 @@ overused_topics:
   - why thunder follows lightning
   - how bees make honey
   - the great barrier reef
+  - how big the universe is
+  - why pluto is not a planet
+  - a day on venus is longer than its year
+  - the sun is a star
+  - light from stars is old
+  - black holes swallowing everything
+  - the great wall of china seen from space
+  - footprints on the moon last forever
 
 # A topic whose subject uses only these words is too broad (e.g. "cat", "ocean").
 generic_subjects:
@@ -81,3 +93,7 @@ generic_subjects:
   - water
   - weather
   - wind
+  - planet
+  - star
+  - galaxy
+  - universe

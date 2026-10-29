@@ -39,7 +39,12 @@ REQUIRED_MODULES = {
     "sqlalchemy": "sqlalchemy",
     "tavily-python": "tavily",
     "PyYAML": "yaml",
-    "openai-whisper": "whisper",
+    "faster-whisper": "faster_whisper",
+    "onnxruntime": "onnxruntime",
+    "numpy": "numpy",
+    "num2words": "num2words",
+    "tokenizers": "tokenizers",
+    "huggingface-hub": "huggingface_hub",
 }
 
 
@@ -251,6 +256,18 @@ def collect_doctor_report(
             "Configured: " + ", ".join(configured_keys)
             if configured_keys
             else "No paid providers configured; secrets are never displayed",
+        )
+    )
+
+    voice_python = environment.get("VOICE_PYTHON", "")
+    voice_ready = bool(voice_python) and Path(voice_python).is_file()
+    checks.append(
+        DoctorCheck(
+            "Cloned voice",
+            "OK" if voice_ready else "WARN",
+            "Voice environment found"
+            if voice_ready
+            else "VOICE_PYTHON is not set or missing; recordings still work, --clone does not",
         )
     )
 

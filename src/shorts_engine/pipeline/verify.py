@@ -30,13 +30,14 @@ from shorts_engine.pipeline.corroboration import (
     find_corroboration,
     find_corroboration_pages,
 )
+from shorts_engine.pipeline.outcomes import end_on_llm_error
 from shorts_engine.pipeline.research import credits_per_search, url_key
 from shorts_engine.providers.factory import (
     get_llm_provider,
     get_search_provider,
     is_mock_provider,
 )
-from shorts_engine.providers.llm.base import BaseLLMProvider, LLMProviderError
+from shorts_engine.providers.llm.base import BaseLLMProvider, LLMOutputError, LLMProviderError
 from shorts_engine.providers.search.base import BaseSearchProvider, SearchProviderError
 from shorts_engine.providers.search.tiers import (
     classify_domain,
@@ -158,7 +159,7 @@ def _verify(
     try:
         extracted = llm.generate_structured(prompt_extract, ExtractedClaims, model_heavy)
     except LLMProviderError as exc:
-        transition_job_state(db, job, JobState.FAILED, reason=f"Claim extraction failed: {exc}")
+        end_on_llm_error(db, job, exc, "claim extraction")
         return False
 
     threshold = float(
@@ -193,6 +194,10 @@ def _verify(
         prompt_check = build_support_prompt(candidate.text, candidate.supporting_quote)
         try:
             check_result = llm.generate_structured(prompt_check, ClaimSupportCheck, model_light)
+        except LLMOutputError:
+            # One unreadable check rejects that claim only; the others still count.
+            assessment.reject_reason = "support_check_invalid_output"
+            continue
         except LLMProviderError as exc:
             transition_job_state(
                 db, job, JobState.FAILED, reason=f"Claim support check failed: {exc}"
@@ -351,7 +356,7 @@ def _verify(
                     break
     except LLMProviderError as exc:
         _write_verification_log(get_data_dir() / "jobs" / job.id / "research", hook_log)
-        transition_job_state(db, job, JobState.FAILED, reason=f"Hook corroboration failed: {exc}")
+        end_on_llm_error(db, job, exc, "hook corroboration")
         return False
     except SearchProviderError as exc:
         _write_verification_log(get_data_dir() / "jobs" / job.id / "research", hook_log)

@@ -6,7 +6,7 @@ import pytest
 
 from shorts_engine.domain.schemas import ClaimSupportCheck
 from shorts_engine.providers.llm.anthropic import AnthropicProvider
-from shorts_engine.providers.llm.base import LLMProviderError
+from shorts_engine.providers.llm.base import LLMOutputError, LLMProviderError
 
 SECRET = "sk-ant-test-secret-value"
 
@@ -17,7 +17,7 @@ class FakeMessages:
         self.error = error
         self.calls = []
 
-    def parse(self, **kwargs):
+    def create(self, **kwargs):
         self.calls.append(kwargs)
         if self.error:
             raise self.error
@@ -30,8 +30,12 @@ def make_provider(result=None, error=None):
     return provider, messages
 
 
-def response(parsed, stop_reason="end_turn"):
-    return SimpleNamespace(parsed_output=parsed, stop_reason=stop_reason)
+def response(output, stop_reason="end_turn", tokens=(100, 20)):
+    """A Messages API response whose text block holds ``output`` (a model or raw JSON text)."""
+    text = output.model_dump_json() if hasattr(output, "model_dump_json") else output
+    content = [] if text is None else [SimpleNamespace(type="text", text=text)]
+    usage = SimpleNamespace(input_tokens=tokens[0], output_tokens=tokens[1])
+    return SimpleNamespace(content=content, stop_reason=stop_reason, usage=usage)
 
 
 def test_returns_validated_output_and_uses_structured_outputs_not_forced_tools():
@@ -40,10 +44,13 @@ def test_returns_validated_output_and_uses_structured_outputs_not_forced_tools()
 
     result = provider.generate_structured("prompt", ClaimSupportCheck, "some-model", effort="low")
 
-    assert result is check
+    assert result == check
     call = messages.calls[0]
-    assert call["output_format"] is ClaimSupportCheck
-    assert call["output_config"] == {"effort": "low"}
+    assert call["output_config"]["effort"] == "low"
+    assert call["output_config"]["format"]["type"] == "json_schema"
+    assert call["output_config"]["format"]["schema"] == anthropic.transform_schema(
+        ClaimSupportCheck.model_json_schema()
+    )
     assert call["model"] == "some-model"
     assert "tool_choice" not in call  # forced tool use is rejected by newer models
 
@@ -52,7 +59,7 @@ def test_effort_defaults_to_medium_and_rejects_unknown_values():
     provider, messages = make_provider(response(ClaimSupportCheck(status="no", reason="x")))
 
     provider.generate_structured("prompt", ClaimSupportCheck, "m")
-    assert messages.calls[0]["output_config"] == {"effort": "medium"}
+    assert messages.calls[0]["output_config"]["effort"] == "medium"
 
     with pytest.raises(ValueError, match="Unknown effort"):
         provider.generate_structured("prompt", ClaimSupportCheck, "m", effort="turbo")
@@ -66,11 +73,28 @@ def test_unusable_stop_reasons_are_errors_not_silent_output(stop_reason):
         provider.generate_structured("prompt", ClaimSupportCheck, "m")
 
 
-def test_missing_parsed_output_is_an_error():
+def test_missing_output_text_is_an_output_error():
     provider, _ = make_provider(response(None))
 
-    with pytest.raises(LLMProviderError, match="no parsed output"):
+    with pytest.raises(LLMOutputError, match="no output text"):
         provider.generate_structured("prompt", ClaimSupportCheck, "m")
+
+
+def test_output_that_breaks_the_schema_names_the_field_and_is_still_billed():
+    provider, _ = make_provider(response('{"status": "maybe", "reason": "x"}', tokens=(900, 300)))
+    billed = []
+    provider.usage_listener = billed.append
+
+    with pytest.raises(LLMOutputError) as raised:
+        provider.generate_structured("prompt", ClaimSupportCheck, "m")
+
+    assert "status: literal_error" in str(raised.value)
+    assert "maybe" not in str(raised.value)  # the output itself is not repeated
+    assert [(u.input_tokens, u.output_tokens) for u in billed] == [(900, 300)]
+
+
+def test_an_output_error_is_a_provider_error_for_callers_that_do_not_care():
+    assert issubclass(LLMOutputError, LLMProviderError)
 
 
 def test_http_errors_become_provider_errors_without_leaking_the_key():

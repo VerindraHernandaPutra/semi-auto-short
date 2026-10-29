@@ -152,6 +152,9 @@ def test_stage_ends_in_review_when_the_video_is_ready(db_session):
     assert job.status == JobState.PENDING_REVIEW.value
     report = json.loads((folder / "render" / "report.json").read_text())
     assert (report["width"], report["height"]) == (1080, 1920)
+    quality = json.loads((folder / "render" / "quality.json").read_text(encoding="utf-8"))
+    assert {"volume", "akhir video", "durasi"} <= {item["name"] for item in quality}
+    assert all(item["status"] in {"ok", "perhatian", "tidak terukur"} for item in quality)
     assert -23 < measure_loudness(folder / "render" / "final.mp4")["lufs"] < -5
 
 
@@ -194,3 +197,15 @@ def test_stale_subtitles_from_an_earlier_alignment_are_rebuilt(db_session):
 
     assert "STALE" not in stale.read_text(encoding="utf-8")
     assert "Jupiter" in stale.read_text(encoding="utf-8")
+
+
+def test_a_vertical_clip_fills_the_frame_instead_of_breaking_the_square_crop(job_dir):
+    ffmpeg(job_dir / "footage", "-f", "lavfi", "-i", "testsrc=s=360x640:r=10:d=2", "-pix_fmt", "yuv420p", "v.mp4")  # fmt: skip
+    plan_file = job_dir / "footage" / "footage_plan.json"
+    plan = json.loads(plan_file.read_text())
+    plan[0] |= {"file": "footage/v.mp4", "width": 360, "height": 640, "clip_s": 2.0}
+    plan_file.write_text(json.dumps(plan))
+
+    final = render_video("job_v", job_dir, get_config())
+
+    assert probe_video(final)[:2] == (1080, 1920)

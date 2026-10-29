@@ -68,6 +68,7 @@ def valid_draft(**overrides):
         ),
         ScriptSegment(
             text="It is a quiet reminder that speed can reshape the water around a tiny animal.",
+            claim_ids=[],
             kind="framing",
             visual_suggestion="sunlight on the sea",
         ),
@@ -79,9 +80,10 @@ def valid_draft(**overrides):
         "segments": segments,
         "ending": "Something so small can leave a very large mark on the water.",
         "ending_kind": "framing",
+        "ending_claim_ids": [],
         "estimated_duration_s": 999,  # the model's own guess must not be trusted
         "story_structure": "observation -> mechanism -> conclusion",
-        "series": "Strange Creatures",
+        "series": "Strange Worlds",
     }
     data.update(overrides)
     return ScriptOutput(**data)
@@ -143,6 +145,9 @@ class ScriptLLM(BaseLLMProvider):
         statement = prompt.split("Statement: ", 1)[1].split("\nVerified claims:", 1)[0]
         verdict = self.flagged.get(statement, "consistent")
         return ScriptClaimCheck(status=verdict, reason="scripted")
+
+
+DRAFTS = int(get_config().settings["script"]["max_rewrites"]) + 1  # first draft plus rewrites
 
 
 def claims_of(db, job_id="job_1"):
@@ -252,7 +257,7 @@ def test_prompt_is_english_and_carries_the_style_guide_series_and_limits(db_sess
 
     assert "STYLE-TEXT" in prompt
     assert 'language with code "en"' in prompt
-    assert "Strange Creatures" in prompt and "observation -> mechanism -> conclusion" in prompt
+    assert "Strange Worlds" in prompt and "observation -> mechanism -> conclusion" in prompt
     assert "91 to 143 words" in prompt
     assert prompt.count("HOOK-ELIGIBLE") >= 2  # one claim is marked, plus the rule text
     assert "[c1] Mantis shrimp strike" in prompt
@@ -296,7 +301,7 @@ def test_a_clean_first_draft_becomes_a_recordable_script(db_session):
     assert 35 <= results["estimated_duration_s"] <= 55
     assert results["estimated_duration_s"] == round(results["word_count"] / 2.6)
     assert len(results["script_claim_checks"]) == 8  # hook, 5 segments, ending, title
-    assert (job.series, job.episode_number) == ("Strange Creatures", 1)
+    assert (job.series, job.episode_number) == ("Strange Worlds", 1)
 
 
 def test_episode_numbers_count_up_within_a_series(db_session):
@@ -316,8 +321,8 @@ def test_episode_numbers_count_up_within_a_series(db_session):
     stage(db_session, second, ScriptLLM([draft]))
 
     assert (first.episode_number, second.episode_number) == (1, 2)
-    assert next_episode_number(db_session, "Strange Creatures") == 3
-    assert next_episode_number(db_session, "Science at Home") == 1
+    assert next_episode_number(db_session, "Strange Worlds") == 3
+    assert next_episode_number(db_session, "Cosmic Scale") == 1
 
 
 def test_a_bad_draft_is_rewritten_with_feedback_and_the_version_records_it(db_session):
@@ -363,25 +368,25 @@ def test_the_model_check_sees_spoken_text_without_pronunciation_hints(db_session
 def test_a_model_check_failure_triggers_a_rewrite_too(db_session):
     job = make_job(db_session)
     flagged_text = valid_draft().segments[1].text
-    llm = ScriptLLM([valid_draft()] * 3, flagged={flagged_text: "overstated"})
+    llm = ScriptLLM([valid_draft()] * (DRAFTS), flagged={flagged_text: "overstated"})
 
     # The same flagged text appears in the rewrite as well, so every attempt fails.
     assert stage(db_session, job, llm) is False
 
     assert job.status == JobState.DROPPED.value
-    assert len(llm.prompts) == 3
+    assert len(llm.prompts) == DRAFTS
     assert "overstated by its claims" in llm.prompts[1]
 
 
 def test_three_failures_drop_the_topic_instead_of_failing_the_job(db_session):
     job = make_job(db_session)
     bad = valid_draft(ending="Like and subscribe for more.")
-    llm = ScriptLLM([bad, bad, bad])
+    llm = ScriptLLM([bad] * DRAFTS)
 
     assert stage(db_session, job, llm) is False
 
     assert job.status == JobState.DROPPED.value  # not FAILED: the topic could not be scripted
-    assert len(llm.prompts) == 3  # one draft and at most two rewrites
+    assert len(llm.prompts) == DRAFTS  # one draft and at most max_rewrites rewrites
     assert llm.check_calls == 0  # deterministic rules failed first, so no model check was paid
     assert db_session.query(Script).count() == 0
     event = db_session.query(JobEvent).order_by(JobEvent.id.desc()).first()
@@ -436,11 +441,16 @@ def test_a_segment_must_say_whether_it_is_factual_or_framing():
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        ScriptSegment(text="An opener.", visual_suggestion="a reef")  # no kind: refused
+        ScriptSegment(text="An opener.", claim_ids=[], visual_suggestion="a reef")  # no kind
+
+    with pytest.raises(ValidationError):
+        ScriptSegment(text="A fact.", kind="factual", visual_suggestion="a reef")  # no claim_ids
 
     schema = ScriptOutput.model_json_schema()
     assert "ending_kind" in schema["required"]
     assert "kind" in schema["$defs"]["ScriptSegment"]["required"]
+    assert "claim_ids" in schema["$defs"]["ScriptSegment"]["required"]
+    assert {"hook_claim_ids", "ending_claim_ids"} <= set(schema["required"])
 
 
 # ------------------------------------------------------------------ feedback the model can act on
@@ -550,12 +560,150 @@ def test_rejected_and_accepted_drafts_are_kept_with_their_problems(db_session):
     assert attempts[1]["problems"] == [] and len(attempts[1]["model_checks"]) == 8
 
 
-def test_a_topic_dropped_after_three_drafts_still_has_all_of_them_on_disk(db_session):
+def test_a_dropped_topic_still_has_all_of_its_drafts_on_disk(db_session):
     job = make_job(db_session)
     bad = valid_draft(ending="Like and subscribe for more.")
-    stage(db_session, job, ScriptLLM([bad, bad, bad]))
+    stage(db_session, job, ScriptLLM([bad] * DRAFTS))
 
     attempts = read_attempts()
 
-    assert [a["attempt"] for a in attempts] == [1, 2, 3]
+    assert [a["attempt"] for a in attempts] == list(range(1, DRAFTS + 1))
     assert all(a["outcome"] == "rejected" and a["problems"] for a in attempts)
+
+
+def test_a_rewrite_sees_the_previous_draft_and_is_told_to_edit_it(db_session):
+    make_job(db_session)
+    claims = list(claims_of(db_session).values())
+    first = valid_draft()
+
+    retry = build_script_prompt(
+        get_config(), "t", claims, "S", ["Use between 3 and 5 body segments, not 8."], first
+    )
+
+    assert "That draft (" in retry and "change only what they require" in retry
+    assert first.hook in retry and first.segments[0].text in retry
+    assert "[c1]" in retry or "[c1, " in retry  # the claim ids it cited are shown
+    plain = build_script_prompt(get_config(), "t", claims, "S")
+    assert "That draft" not in plain
+
+
+def test_the_prompt_asks_for_the_segment_count_and_plain_words_for_the_subject(db_session):
+    make_job(db_session)
+    prompt = build_script_prompt(get_config(), "t", list(claims_of(db_session).values()), "S")
+
+    assert "Put several short sentences into one segment" in prompt
+    assert "Name the subject" in prompt and "whose cited claim names it" in prompt
+
+
+def test_the_second_attempt_receives_the_first_draft(db_session):
+    job = make_job(db_session)
+    wrong_series = valid_draft(title_working="Marker Title Xyz", series="Not A Series")
+    llm = ScriptLLM([wrong_series, valid_draft()])
+
+    assert stage(db_session, job, llm) is True
+    assert "Marker Title Xyz" not in llm.prompts[0]
+    assert "Marker Title Xyz" in llm.prompts[1]
+
+
+def test_a_draft_that_is_too_short_is_told_how_much_to_add_and_what_it_can_use(db_session):
+    make_job(db_session)
+    claims = claims_of(db_session)
+    short = valid_draft()
+    short.segments = short.segments[:1]
+
+    problems = script_problems(short, claims, get_config())
+    length = next(p for p in problems if "words in total" in p)
+
+    assert "Add at least" in length and "Verified claims not used yet" in length
+    used = {*short.hook_claim_ids, *short.ending_claim_ids, *short.segments[0].claim_ids}
+    unused = [cid for cid in claims if cid not in used]
+    assert any(f"[{cid}]" in length for cid in unused)
+    assert not any(f"[{cid}]" in length for cid in used)
+
+
+def test_a_draft_that_is_too_long_gets_no_claims_to_add(db_session):
+    make_job(db_session)
+    long_draft = valid_draft()
+    long_draft.segments = long_draft.segments * 8
+
+    problems = script_problems(long_draft, claims_of(db_session), get_config())
+
+    assert not any("Verified claims not used yet" in problem for problem in problems)
+
+
+def test_a_topic_with_too_little_claim_text_is_dropped_before_any_draft_is_paid_for(db_session):
+    job = make_job(db_session)
+    config = get_config()
+    config.settings["script"]["min_claim_words"] = 100
+    llm = ScriptLLM([valid_draft()])
+
+    assert run_script(db_session, job, llm=llm, config=config) is False
+
+    assert job.status == JobState.DROPPED.value
+    assert llm.prompts == []  # no draft was requested
+    reason = db_session.query(JobEvent).order_by(JobEvent.id.desc()).first().reason
+    assert reason.startswith("insufficient_material:") and reason.endswith("_words_of_100")
+
+
+def test_claim_material_counts_a_confirmed_claim_once(db_session):
+    from shorts_engine.pipeline.script import claim_material_words
+
+    make_job(db_session)
+    claims = list(claims_of(db_session).values())
+    once = claim_material_words(claims)
+    twin = Claim(
+        id="twin", job_id="job_1", source_ids=["s2"], text=claims[0].text,
+        supporting_quote="q", quote_match_score=1.0, support_check="supports", status="verified",
+    )  # fmt: skip
+
+    assert claim_material_words([*claims, twin]) == once
+
+
+def test_a_hyphenated_name_found_in_the_cited_claim_is_accepted():
+    claims = "The dust was found to come from Saturn's innermost ring, the D-ring."
+
+    assert find_unsupported_names("The dust comes from the innermost D-ring.", claims) == []
+    assert find_unsupported_names("The dust comes from the E-ring.", claims) == ["E-ring"]
+
+
+def test_title_case_words_in_the_title_are_not_treated_as_names(db_session):
+    make_job(db_session)
+    draft = valid_draft(title_working="Why Saturn's Rings Are Slowly Disappearing")
+
+    problems = script_problems(draft, claims_of(db_session), get_config())
+
+    assert not [problem for problem in problems if problem.startswith("The title names")]
+
+
+def test_a_draft_that_breaks_the_schema_is_a_rejected_draft_not_a_failed_job(db_session):
+    from shorts_engine.providers.llm.base import LLMOutputError
+
+    job = make_job(db_session)
+
+    class SchemaBreakingOnce(ScriptLLM):
+        def generate_structured(self, prompt, schema, model_name, effort=None):
+            if schema is ScriptOutput and not self.prompts:
+                self.prompts.append(prompt)
+                raise LLMOutputError(
+                    "fake", "output did not match ScriptOutput (segments.0.claim_ids: missing)"
+                )
+            return super().generate_structured(prompt, schema, model_name, effort)
+
+    llm = SchemaBreakingOnce([valid_draft()])
+
+    assert stage(db_session, job, llm) is True
+    assert job.status == JobState.AWAITING_VOICE.value
+    attempts = read_attempts()
+    assert attempts[0]["draft"] is None and "required format" in attempts[0]["problems"][0]
+    assert "segments.0.claim_ids: missing" in llm.prompts[1]  # the rewrite is told what broke
+
+
+def test_drafts_that_keep_breaking_the_schema_drop_the_topic(db_session):
+    from shorts_engine.providers.llm.base import LLMOutputError
+
+    job = make_job(db_session)
+    llm = ScriptLLM([], error=LLMOutputError("fake", "output did not match ScriptOutput (x)"))
+
+    assert stage(db_session, job, llm) is False
+    assert job.status == JobState.DROPPED.value  # not FAILED: the service works, the drafts did not
+    assert len(llm.prompts) == DRAFTS

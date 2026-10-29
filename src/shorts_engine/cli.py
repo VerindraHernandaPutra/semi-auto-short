@@ -37,17 +37,17 @@ from shorts_engine.pipeline.topics import (
     TopicGenerationError,
     refill_topic_queue,
 )
-from shorts_engine.pipeline.voice import synthesize_narration
 from shorts_engine.providers.factory import use_mock_providers
-from shorts_engine.providers.voice.base import VoiceProviderError
 from shorts_engine.services.costs import (
     BudgetExceeded,
     SearchQuotaExceeded,
     cost_report,
 )
+from shorts_engine.services.make import VideoResult, finish_job, make_videos
 from shorts_engine.services.produce import (
     STOP_ATTEMPTS,
     STOP_BUDGET,
+    STOP_COST_CAP,
     STOP_FAILED,
     STOP_QUEUE,
     STOP_QUOTA,
@@ -78,6 +78,7 @@ def _stop_message(report: ProduceReport) -> str:
         STOP_ATTEMPTS: "terlalu banyak topik gugur; batas percobaan tercapai.",
         STOP_FAILED: f"ada pekerjaan yang gagal ({report.stop_detail[:120]}).",
         STOP_REFILL: f"antrean topik gagal diisi ({report.stop_detail[:120]}).",
+        STOP_COST_CAP: f"batas biaya sesi ini tercapai ({report.stop_detail}).",
     }
     return messages.get(report.stopped or "", report.stopped or "")
 
@@ -457,6 +458,29 @@ def process_render(
         db.close()
 
 
+CLONE_NOTICE = (
+    "Penting: suara ini buatan komputer. Saat mengunggah, centang pilihan konten "
+    "yang diubah atau sintetis di YouTube Studio."
+)
+
+
+def _print_video_result(result: VideoResult, cloned: bool) -> None:
+    if not result.ok:
+        typer.echo(f"  GAGAL [{result.job_id}] {result.topic}: {result.detail}", err=True)
+        return
+    typer.echo(f"  SIAP [{result.job_id}] {result.topic}")
+    typer.echo(f"    Video: {result.video}")
+    typer.echo(f"    Judul dan deskripsi: {result.description}")
+    if result.notes:
+        typer.echo("    Catatan pemeriksaan mutu:")
+        for note in result.notes:
+            typer.echo(f"      - {note}")
+    else:
+        typer.echo("    Pemeriksaan mutu otomatis: semua baik.")
+    if cloned:
+        typer.echo(f"    {CLONE_NOTICE}")
+
+
 @app.command(name="finish")
 def finish_command(
     job_id: str = typer.Argument(..., help="ID Job yang naskahnya sudah Anda rekam"),
@@ -467,40 +491,60 @@ def finish_command(
     db = SessionLocal()
     try:
         job = _get_job_or_exit(db, job_id)
-        if job.status != JobState.AWAITING_VOICE.value:
-            typer.echo(f"Job {job_id} tidak menunggu rekaman (status: {job.status}).", err=True)
+        typer.echo(
+            "Membuat video (suara klon menit pertama bisa lama)..." if clone else "Membuat video..."
+        )
+        result = finish_job(db, job, audio_path=audio_path, clone=clone)
+        typer.echo("")
+        _print_video_result(result, cloned=clone)
+        if not result.ok:
             raise typer.Exit(code=1)
-        if clone == (audio_path is not None):
-            typer.echo("Beri file rekaman, atau pakai --clone (tidak keduanya).", err=True)
-            raise typer.Exit(code=1)
-        if clone:
-            typer.echo("Membuat suara klon (menit pertama bisa lama)...")
-            try:
-                audio_path = synthesize_narration(db, job)
-            except VoiceProviderError as exc:
-                typer.echo(f"Berhenti di tahap ini. Detail: {exc}", err=True)
-                raise typer.Exit(code=1) from exc
-        steps = [
-            ("Memproses suara", lambda: run_audio_alignment(db, job, str(audio_path))),
-            ("Memilih footage", lambda: run_footage_selection(db, job)),
-            ("Merender video", lambda: run_rendering(db, job)),
-        ]
-        for label, step in steps:
-            typer.echo(f"{label}...")
-            if not step():
-                db.refresh(job)
-                typer.echo(f"Berhenti di tahap ini. Detail: {job.error}", err=True)
-                raise typer.Exit(code=1)
-        folder = get_data_dir() / "jobs" / job_id / "render"
-        typer.echo(f"\nVideo siap Anda tonton: {folder / 'final.mp4'}")
-        typer.echo(f"Judul dan deskripsi: {folder / 'description.txt'}")
-        if clone:
-            typer.echo(
-                "\nPenting: suara ini buatan komputer. Saat mengunggah, centang pilihan konten "
-                "yang diubah atau sintetis di YouTube Studio."
-            )
     finally:
         db.close()
+
+
+@app.command(name="make")
+def make_command(
+    count: int = typer.Option(1, "--count", min=1, help="Jumlah video yang ingin dibuat"),
+    no_voice: bool = typer.Option(
+        False, "--no-voice", help="Hanya siapkan naskah; rekam suara sendiri lalu pakai finish"
+    ),
+    max_cost: float = typer.Option(
+        0.0, "--max-cost", min=0.0, help="Batas biaya sesi dalam rupiah (0 = ikut anggaran biasa)"
+    ),
+):
+    """Dari antrean topik sampai video jadi, otomatis (topik gugur diganti, suara klon Anda)."""
+    db = SessionLocal()
+    try:
+        report = make_videos(db, count, clone=not no_voice, max_cost_idr=max_cost or None)
+    finally:
+        db.close()
+
+    scripts = report.scripts
+    typer.echo("Naskah:")
+    for number, attempt in enumerate(scripts.attempts, start=1):
+        label = {
+            "ready": "SIAP",
+            "dropped": "dibuang",
+            "failed": "GAGAL",
+            "interrupted": "dihentikan",
+        }[attempt.outcome]
+        detail = f" ({attempt.detail})" if attempt.detail else ""
+        typer.echo(f"  {number}. {label} [{attempt.job_id}] {attempt.topic}{detail}")
+    typer.echo(f"  Biaya riset dan naskah: Rp{scripts.cost_idr:,.0f}")
+
+    if not no_voice:
+        typer.echo("\nVideo:")
+        for result in report.videos:
+            _print_video_result(result, cloned=True)
+        made = sum(1 for result in report.videos if result.ok)
+        typer.echo(f"\nVideo jadi: {made} dari {count}.")
+    else:
+        typer.echo(f"\nNaskah siap rekam: {len(scripts.ready_job_ids)} dari {count}.")
+    if scripts.stopped:
+        typer.echo(f"Berhenti: {_stop_message(scripts)}", err=True)
+    if scripts.stopped or any(not result.ok for result in report.videos):
+        raise typer.Exit(code=1)
 
 
 @app.command(name="serve")

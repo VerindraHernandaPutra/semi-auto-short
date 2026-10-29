@@ -8,6 +8,7 @@ HINT_PATTERN = re.compile(r"\[[^\]]*\]")  # pronunciation hints such as [sis-TEM
 SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 CAPITALISED = re.compile(r"[A-Z][A-Za-z'-]+")
 WORD = re.compile(r"[A-Za-z0-9']+")
+HYPHENATED = re.compile(r"[A-Za-z0-9']+(?:-[A-Za-z0-9']+)+")
 SECOND_PERSON = re.compile(r"\b(you|your|yours|yourself)\b", re.IGNORECASE)
 
 
@@ -54,7 +55,9 @@ def find_unsupported_names(statement: str, claims_text: str) -> list[str]:
     The first word of a sentence is ignored because it is capitalised anyway. This is a heuristic:
     it cannot see lower-case names, which the per-statement model check still covers.
     """
-    claim_words = {_singular(w.casefold()) for w in WORD.findall(claims_text)}
+    # Hyphenated names ("D-ring") are matched whole as well as word by word.
+    words = WORD.findall(claims_text) + HYPHENATED.findall(claims_text)
+    claim_words = {_singular(w.casefold()) for w in words}
     unsupported = []
     for sentence in SENTENCE_SPLIT.split(spoken_text(statement)):
         for match in CAPITALISED.finditer(sentence):

@@ -232,3 +232,97 @@ def test_a_clip_outside_the_channels_field_is_never_picked_even_if_words_match()
 
     assert pick.candidate.asset_id == "ok"
     assert relevance(tornado, {"storm"}, set(), {"space"}) == -1
+
+
+class FakeScorer:
+    """Scores a preview by the number in its bytes (b"0.9" -> 0.9)."""
+
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.prompts = []
+
+    def match_probabilities(self, positive, negatives, images):
+        if self.fail:
+            from shorts_engine.pipeline.clip_ranker import ClipError
+
+            raise ClipError("no model")
+        self.prompts.append((positive, negatives))
+        return [float(image) for image in images]
+
+
+def thumbs(table):
+    return lambda url: table.get(url)
+
+
+def candidate_with_preview(asset_id, tags, preview):
+    item = cand(asset_id, tags)
+    item.thumbnail_url = f"https://cdn.example/{asset_id}.jpg"
+    return item, f"https://cdn.example/{asset_id}.jpg", preview
+
+
+def test_the_picture_decides_even_when_a_lying_tag_scores_higher():
+    liar, liar_url, _ = candidate_with_preview("liar", ["jupiter", "storm", "space"], b"0.05")
+    honest, honest_url, _ = candidate_with_preview("honest", ["space"], b"0.9")
+    provider = FakeProvider({"jupiter storm": [liar, honest]})
+    scorer = FakeScorer()
+    settings = {"min_clip_seconds": 5, "clip": {"negatives": ["a cartoon"]}}
+
+    [pick] = pick_footage(
+        provider, [Shot(0, "jupiter storm", 8.0)], "Jupiter", settings,
+        scorer=scorer, fetch=thumbs({liar_url: b"0.05", honest_url: b"0.9"}),
+    )  # fmt: skip
+
+    assert pick.candidate.asset_id == "honest" and pick.clip_probability == pytest.approx(0.9)
+    assert scorer.prompts[0] == ("a photo of jupiter storm", ["a cartoon"])
+
+
+def test_when_every_picture_is_a_poor_match_the_shot_gets_no_clip():
+    first, first_url, _ = candidate_with_preview("a", ["space"], b"0.1")
+    second, second_url, _ = candidate_with_preview("b", ["space"], b"0.15")
+    provider = FakeProvider({"jupiter storm": [first, second]})
+
+    picks = pick_footage(
+        provider, [Shot(0, "jupiter storm", 8.0)], "Jupiter", {"clip": {"weak_probability": 0.2}},
+        scorer=FakeScorer(), fetch=thumbs({first_url: b"0.1", second_url: b"0.15"}),
+    )  # fmt: skip
+
+    assert picks == [None]
+
+
+def test_if_the_model_cannot_judge_tags_decide_as_before():
+    strong, strong_url, _ = candidate_with_preview("strong", ["jupiter", "storm"], b"x")
+    weak, weak_url, _ = candidate_with_preview("weak", ["space"], b"x")
+    provider = FakeProvider({"jupiter storm": [weak, strong]})
+
+    [pick] = pick_footage(
+        provider, [Shot(0, "jupiter storm", 8.0)], "Jupiter", {},
+        scorer=FakeScorer(fail=True), fetch=thumbs({strong_url: b"1", weak_url: b"1"}),
+    )  # fmt: skip
+
+    assert pick.candidate.asset_id == "strong" and pick.clip_probability is None
+
+
+def test_previews_without_a_download_fall_back_to_tags_and_never_repeat_a_clip():
+    one, _, _ = candidate_with_preview("one", ["space", "jupiter"], b"")
+    two, _, _ = candidate_with_preview("two", ["space"], b"")
+    provider = FakeProvider({"jupiter storm": [one, two]})
+
+    picks = pick_footage(
+        provider, [Shot(0, "jupiter storm", 8.0), Shot(1, "jupiter storm", 8.0)], "Jupiter", {},
+        scorer=FakeScorer(), fetch=thumbs({}),
+    )  # fmt: skip
+
+    assert [p.candidate.asset_id for p in picks] == ["one", "two"]
+
+
+def test_thumbnails_come_only_from_allowed_https_hosts():
+    from shorts_engine.pipeline.footage import fetch_thumbnail
+
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=b"jpeg"))
+
+    assert fetch_thumbnail("https://cdn.example/a.jpg", HOSTS, transport) == b"jpeg"
+    assert fetch_thumbnail("http://cdn.example/a.jpg", HOSTS, transport) is None
+    assert fetch_thumbnail("https://evil.example/a.jpg", HOSTS, transport) is None
+    assert fetch_thumbnail("", HOSTS, transport) is None
+    huge = httpx.MockTransport(lambda request: httpx.Response(200, content=b"x" * 4_000_000))
+    assert fetch_thumbnail("https://cdn.example/a.jpg", HOSTS, huge) is None

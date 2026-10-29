@@ -150,13 +150,14 @@ Queue balance so far. Favour categories and series that are underrepresented:
 categories: {dict(category_counts) or "none"}; series: {dict(series_counts) or "none"}
 
 Propose exactly {count} new topics. Rules:
-- Be specific. Name a particular subject (one species, one object or one phenomenon) and one
-  narrow angle on it (a single behavior, mechanism or surprising detail). Prefer subjects that
+- Be specific. Name a particular subject (one planet, moon, star, object or phenomenon) and one
+  narrow angle on it (a single mechanism, measurement or surprising detail). Prefer subjects that
   popular science videos rarely cover, as long as they can still be filmed. Every topic needs a
   different subject.
 - Each topic must be answerable within one short video, not a broad subject.
-- Pick subjects that commonly exist as stock video (animals, weather, water, fire, space, plants,
-  insects). Avoid topics that need diagrams, microscope views, anatomy, or rare species.
+- Pick subjects that commonly exist as stock video (planets, moons, the Sun, stars, nebulae,
+  galaxies, night skies, telescopes). Avoid topics that need diagrams, charts or abstract
+  processes that cannot be shown.
 - Do not state scientific facts as certain; you are proposing ideas that will be fact-checked later.
 - footage_queries: 2 to 3 short queries that name the specific subject itself, so we can test
   whether stock video of that exact subject exists.

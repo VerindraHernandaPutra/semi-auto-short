@@ -277,3 +277,25 @@ def test_no_series_hook_pattern_trips_the_overstatement_rule():
     for series in config.topic_policy["series"]:
         found = find_unclaimed_overstatements(series["hook_pattern"], "", words)
         assert found == [], f"{series['name']} hook pattern would always be rejected: {found}"
+
+
+def test_a_run_stops_starting_new_topics_once_its_cost_cap_is_reached(db_session, stages):
+    from shorts_engine.services.produce import STOP_COST_CAP
+
+    add_topic(db_session, "ok-a", score=9.0)
+    add_topic(db_session, "ok-b", score=5.0)
+
+    report = produce(db_session, 2, max_cost_idr=1000.0)  # one script costs Rp1,550 here
+
+    assert len(report.ready_job_ids) == 1
+    assert report.stopped == STOP_COST_CAP and "1,000" in report.stop_detail
+    assert db_session.query(Topic).filter_by(text="ok-b").one().status == "queued"  # untouched
+
+
+def test_without_a_cost_cap_the_run_goes_on(db_session, stages):
+    add_topic(db_session, "ok-a", score=9.0)
+    add_topic(db_session, "ok-b", score=5.0)
+
+    report = produce(db_session, 2)
+
+    assert len(report.ready_job_ids) == 2 and report.stopped is None

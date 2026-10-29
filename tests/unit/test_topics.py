@@ -32,7 +32,9 @@ def db_session():
     session.close()
 
 
-def candidate(text, category="animals", series="Strange Creatures", visual=8, surprise=6, **kw):
+def candidate(
+    text, category="planets_and_moons", series="Strange Worlds", visual=8, surprise=6, **kw
+):
     return TopicCandidate(
         text=text,
         category=category,
@@ -161,7 +163,9 @@ def test_candidate_without_a_policy_verdict_is_rejected_not_queued(db_session):
 
 
 def test_reworded_duplicate_of_existing_topic_is_rejected(db_session):
-    db_session.add(Topic(id="old", text="How a dung beetle rolls a ball", category="animals"))
+    db_session.add(
+        Topic(id="old", text="How a dung beetle rolls a ball", category="planets_and_moons")
+    )
     db_session.commit()
     llm = FakeLLM(
         [
@@ -248,7 +252,7 @@ def test_refill_stops_at_target_and_is_bounded_by_max_batches(db_session):
 
 
 def test_refill_does_nothing_when_queue_is_already_full(db_session):
-    db_session.add(Topic(id="q", text="Existing", category="animals", status="queued"))
+    db_session.add(Topic(id="q", text="Existing", category="planets_and_moons", status="queued"))
     db_session.commit()
     llm = FakeLLM([])
 
@@ -262,7 +266,7 @@ def test_generation_prompt_uses_policy_style_guide_and_known_topics():
     from collections import Counter
 
     prompt = build_generation_prompt(
-        config, "STYLE-GUIDE-TEXT", 5, ["Known topic one"], Counter(animals=2), Counter()
+        config, "STYLE-GUIDE-TEXT", 5, ["Known topic one"], Counter(planets_and_moons=2), Counter()
     )
 
     assert "STYLE-GUIDE-TEXT" in prompt

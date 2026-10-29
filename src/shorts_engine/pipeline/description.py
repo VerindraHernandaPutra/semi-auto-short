@@ -1,10 +1,12 @@
 import json
+import re
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from shorts_engine.config import AppConfig
 from shorts_engine.db.models import Claim, Job, Script, Source
+from shorts_engine.pipeline.claim_validation import claim_key
 from shorts_engine.pipeline.script_rules import spoken_text
 
 MAX_TITLE_CHARS = 60
@@ -20,20 +22,47 @@ def cited_claim_ids(script: Script) -> list[str]:
     return list(dict.fromkeys(ids))
 
 
+def clean_title(title: str, series: str | None) -> str:
+    """The title without the series label or episode number the model may have put into it.
+
+    The label is added once, at the end, by ``build_title``; "The Moon Drifts: Everyone Gets This
+    Wrong" would otherwise show the label twice.
+    """
+    text = " ".join(title.split())
+    if series:
+        text = re.sub(re.escape(series), " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"#\s*\d+", " ", text)
+    return " ".join(text.split()).strip(" :-–—|,")
+
+
+def video_title(script: Script) -> str:
+    """The plain working title of a script, as shown over the video."""
+    results = script.check_results or {}
+    return clean_title(str(results.get("title_working", "")), results.get("series"))
+
+
 def build_title(script: Script) -> str:
     """Plain title with the series label at the end when it still fits (style guide)."""
     results = script.check_results or {}
-    title = " ".join(str(results.get("title_working", "")).split())
+    title = video_title(script)
     series, episode = results.get("series"), results.get("episode_number")
     label = f"{series} #{episode}" if series and episode else ""
-    if label and len(f"{title} {label}") <= MAX_TITLE_CHARS:
-        return f"{title} {label}"
+    if label and len(f"{title} | {label}") <= MAX_TITLE_CHARS:
+        return f"{title} | {label}"
     return title[:MAX_TITLE_CHARS].rstrip()
 
 
 def source_lines(db: Session, job: Job, script: Script) -> list[str]:
-    """Title and URL of every source behind a cited claim. URLs come from the database only."""
-    claims = db.query(Claim).filter(Claim.job_id == job.id, Claim.id.in_(cited_claim_ids(script)))
+    """Title and URL of every source behind a cited claim. URLs come from the database only.
+
+    A claim confirmed by several independent sources (the hook) exists once per source; the script
+    cites one of them, but every source that states the same claim is credited.
+    """
+    cited = cited_claim_ids(script)
+    verified = db.query(Claim).filter(Claim.job_id == job.id, Claim.status == "verified").all()
+    cited_keys = {claim_key(c.text) for c in verified if c.id in cited}
+    claims = [c for c in verified if c.id in cited or claim_key(c.text) in cited_keys]
+    claims.sort(key=lambda c: (c.id not in cited, c.id))  # the cited claims' sources come first
     source_ids = list(dict.fromkeys(sid for claim in claims for sid in (claim.source_ids or [])))
     sources = {
         s.id: s for s in db.query(Source).filter(Source.job_id == job.id, Source.id.in_(source_ids))

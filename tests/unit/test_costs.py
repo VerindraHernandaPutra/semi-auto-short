@@ -125,7 +125,7 @@ class FakeMessages:
     def __init__(self, response):
         self.response = response
 
-    def parse(self, **kwargs):
+    def create(self, **kwargs):
         return self.response
 
 
@@ -134,8 +134,9 @@ def provider_with(response):
 
 
 def response(stop_reason="end_turn", parsed="ok"):
+    text = parsed.model_dump_json() if hasattr(parsed, "model_dump_json") else None
     return SimpleNamespace(
-        parsed_output=parsed,
+        content=[SimpleNamespace(type="text", text=text)] if text else [],
         stop_reason=stop_reason,
         usage=SimpleNamespace(input_tokens=321, output_tokens=45),
     )

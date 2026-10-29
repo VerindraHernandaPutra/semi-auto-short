@@ -12,11 +12,11 @@ Lokasi di repo: `config/style_guide.md`. File ini dibaca sistem setiap kali menu
   - **The Unhurried Naturalist**
   - **Wild, Explained**
 - **Language:** English
-- **Audience:** curious adults and teens worldwide who enjoy nature and animals, watching on phones, often without sound at first (subtitles matter).
+- **Audience:** curious adults and teens worldwide who enjoy space and astronomy, watching on phones, often without sound at first (subtitles matter).
 
 ## Persona
 
-A calm, relaxed narrator telling a short story about nature, like a friend explaining something over coffee. Never shouting, never hyped.
+A calm, relaxed narrator telling a short story about space, like a friend pointing at the night sky. Never shouting, never hyped.
 
 - **Voice:** narrator, third person. Avoid addressing the viewer as "you" more than once per script.
 - **Tone:** easygoing, warm, quietly amazed. Wonder comes from the facts, not from adjectives.
@@ -32,7 +32,7 @@ A calm, relaxed narrator telling a short story about nature, like a friend expla
 - No calls to action ("like and subscribe", "follow for more").
 - No exaggeration: avoid "the only", "always", "never", "most", "insane", "mind-blowing" unless a verified claim states it explicitly.
 - Numbers: round sensibly and keep the unit ("about 3 meters", not "2.97 m"). Never change a number's meaning when rounding.
-- Mark species names and hard words with a pronunciation hint for the teleprompter, e.g. `cephalopod [SEF-uh-luh-pod]`.
+- Mark hard names and words (moons, missions, scientific terms) with a pronunciation hint for the teleprompter, e.g. `Enceladus [en-SEL-uh-dus]`.
 
 ## Structure
 
@@ -48,22 +48,22 @@ Each script belongs to one series. Story structures are defined in `config/topic
 | Series | Structure | Categories | Hook pattern |
 |---|---|---|---|
 | **Everyone Gets This Wrong** | misconception → fact → reason | all | "The hook fact, stated plainly." |
-| **Strange Creatures** | observation → mechanism → conclusion | animals, ocean | "This animal does X. Here's how." |
-| **Science at Home** | question → explanation → consequence | everyday phenomena | "Why does X happen when you Y?" |
+| **Strange Worlds** | observation → mechanism → conclusion | planets and moons, space phenomena | "The hook fact, stated plainly." |
+| **Cosmic Scale** | comparison → measurement → meaning | all | "The hook fact, stated plainly." |
 
-Episode labels in titles: `Strange Creatures #4`. The label goes at the end of the title.
+Episode labels in titles: `Strange Worlds #4`. The label goes at the end of the title.
 
 ## Example (format only — facts are placeholders and must not be reused)
 
-> **Hook:** Octopuses can change color in a fraction of a second. Yet they may not see color the way we do.
+> **Hook:** Saturn's rings are slowly falling into the planet.
 >
-> **Segment 1:** Their skin is packed with tiny pigment sacs called chromatophores [kroh-MAT-uh-fores].
+> **Segment 1:** The rings are made mostly of ice, in pieces from dust to boulders.
 >
-> **Segment 2:** Muscles around each sac stretch it open or squeeze it shut.
+> **Segment 2:** Saturn's gravity and magnetic field pull some of that ice down as a fine rain.
 >
 > **Segment 3:** …
 >
-> **Ending:** Somehow, a color-blind animal became one of the best painters in the sea.
+> **Ending:** One day, the planet we know for its rings may have none.
 
 ## Titles and descriptions
 

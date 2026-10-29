@@ -8,9 +8,11 @@ from pydantic import BaseModel, Field
 
 class ScriptSegment(BaseModel):
     text: str = Field(..., description="Narration text for this segment")
+    # Required, not defaulted: models tend to leave out optional fields, and a factual segment
+    # without its ids is rejected (seen on a live run, ADR 0023).
     claim_ids: list[str] = Field(
-        default_factory=list,
-        description="IDs of the verified claims backing this segment; empty for framing",
+        ...,
+        description="IDs of the verified claims backing this segment; an empty list for framing",
     )
     kind: Literal["factual", "framing"] = Field(
         ...,
@@ -26,7 +28,7 @@ class ScriptOutput(BaseModel):
     title_working: str = Field(..., description="Working title")
     hook: str = Field(..., description="Opening sentence (about 2 seconds when spoken)")
     hook_claim_ids: list[str] = Field(
-        default_factory=list,
+        ...,
         description="Verified claim IDs that support every factual statement in the hook",
     )
     segments: list[ScriptSegment] = Field(..., description="Main body segments of the script")
@@ -35,8 +37,7 @@ class ScriptOutput(BaseModel):
         ..., description="'factual' if the ending states a fact, otherwise 'framing'"
     )
     ending_claim_ids: list[str] = Field(
-        default_factory=list,
-        description="Verified claim IDs supporting a factual ending",
+        ..., description="Verified claim IDs supporting a factual ending; an empty list for framing"
     )
     estimated_duration_s: int = Field(
         ..., description="Estimated spoken duration of the script in seconds (35-55)"
@@ -48,7 +49,7 @@ class ScriptOutput(BaseModel):
 
 class TopicCandidate(BaseModel):
     text: str = Field(
-        ..., description="Specific topic, e.g. 'How an octopus changes color in a split second'"
+        ..., description="Specific topic, e.g. 'Why Saturn's rings are slowly disappearing'"
     )
     category: str = Field(..., description="One of the allowed topic categories")
     series: str = Field(..., description="Name of the series that fits the topic")
@@ -60,7 +61,7 @@ class TopicCandidate(BaseModel):
         ...,
         description=(
             "The specific named subject: a particular species, object or phenomenon, "
-            "e.g. 'mantis shrimp'. Never a broad word such as 'bird' or 'ocean'."
+            "e.g. 'Saturn's rings'. Never a broad word such as 'planet' or 'space'."
         ),
     )
     specificity_score: int = Field(

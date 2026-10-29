@@ -13,9 +13,10 @@ from shorts_engine.domain.state_machine import JobState, transition_job_state
 from shorts_engine.pipeline.audio import measure_loudness, probe_audio
 from shorts_engine.pipeline.branding import create_branding
 from shorts_engine.pipeline.data_graphics import create_graphics
-from shorts_engine.pipeline.description import write_description
+from shorts_engine.pipeline.description import video_title, write_description
 from shorts_engine.pipeline.footage import probe_video
 from shorts_engine.pipeline.music import prepare_music
+from shorts_engine.pipeline.quality import attention_notes, run_quality_checks
 from shorts_engine.pipeline.shot_look import best_start, gamma_for, luma_profile
 from shorts_engine.pipeline.subtitles import SubtitleError, create_subtitles
 
@@ -48,7 +49,12 @@ def encoder_args(config: AppConfig, quality: str) -> list[str]:
 
 
 def shot_filter(
-    blur: int, gamma: float, frames: int, foreground: str = "square", zoom_max: float = 1.07
+    blur: int,
+    gamma: float,
+    frames: int,
+    foreground: str = "square",
+    zoom_max: float = 1.07,
+    portrait: bool = False,
 ) -> str:
     """One 9:16 shot: the clip over its own blurred copy, brightened if dark, slowly pushing in.
 
@@ -57,13 +63,23 @@ def shot_filter(
     """
     small_w, small_h = WIDTH // 4, HEIGHT // 4
     lift = f",eq=gamma={gamma}" if gamma > 1.0 else ""
+    step = (zoom_max - 1.0) / max(frames, 1)
+    if portrait:
+        # A vertical clip fills the whole frame: no blurred copy behind it.
+        return (
+            f"[0:v]fps={FPS},scale={WIDTH * 2}:{HEIGHT * 2}:force_original_aspect_ratio=increase:"
+            f"flags=bicubic,crop={WIDTH * 2}:{HEIGHT * 2}{lift},"
+            f"zoompan=z='min(zoom+{step:.6f},{zoom_max})':d=1:"
+            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={WIDTH}x{HEIGHT}:fps={FPS},"
+            f"setsar=1,format=yuv420p[v]"
+        )
     if foreground == "wide":
         fg = f"[fg]scale={WIDTH}:-2:force_original_aspect_ratio=decrease{lift},setsar=1[f]"
     else:
         big = WIDTH * 2  # zoom on a larger picture so the push-in moves smoothly
-        step = (zoom_max - 1.0) / max(frames, 1)
         fg = (
-            f"[fg]fps={FPS},scale=-2:{big}:flags=bicubic,crop={big}:{big}{lift},"
+            f"[fg]fps={FPS},scale={big}:{big}:force_original_aspect_ratio=increase:flags=bicubic,"
+            f"crop={big}:{big}{lift},"
             f"zoompan=z='min(zoom+{step:.6f},{zoom_max})':d=1:"
             f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={WIDTH}x{WIDTH}:fps={FPS},setsar=1[f]"
         )
@@ -112,6 +128,7 @@ def render_shot(job_id: str, job_dir: Path, shot: dict, config: AppConfig) -> tu
         round(needed * FPS),
         settings.get("foreground", "square"),
         float(settings.get("zoom_max", 1.07)),
+        int(shot.get("height") or 0) > int(shot.get("width") or 0),
     )
     args = ["-ss", f"{start:.2f}", "-i", shot["file"], "-t", f"{needed:.3f}", "-filter_complex",
             graph, "-map", "[v]", "-an", *encoder_args(config, "draft"), out]  # fmt: skip
@@ -288,15 +305,16 @@ def run_rendering(
         create_graphics(
             job_dir, [script.hook, *[s["text"] for s in script.segments], script.ending], config
         )
-        results = script.check_results or {}
         length = output_length(probe_audio(job_dir / "audio" / "narration.wav").duration_s, config)
-        create_branding(job_dir, str(results.get("title_working", "")), length, config)
+        create_branding(job_dir, video_title(script), length, config)
         final = render_video(job.id, job_dir, config)
         report = check_result(job.id, final, length)
         write_description(db, job, job_dir, config)
         (job_dir / "render" / "report.json").write_text(
             json.dumps(report, indent=2), encoding="utf-8"
         )
+        transition_job_state(db, job, JobState.QUALITY_CHECK, reason="Pemeriksaan mutu otomatis")
+        notes = attention_notes(run_quality_checks(job_dir, report, length, config, parts))
     except (RenderError, SubtitleError) as exc:
         transition_job_state(db, job, JobState.FAILED, reason=str(exc))
         return False
@@ -304,7 +322,8 @@ def run_rendering(
         logger.exception("render failed for %s", job.id)
         transition_job_state(db, job, JobState.FAILED, reason=f"Gagal merender: {exc}")
         return False
-    transition_job_state(
-        db, job, JobState.PENDING_REVIEW, reason="Video selesai, menunggu tontonan Anda"
-    )
+    reason = "Video selesai, menunggu tontonan Anda"
+    if notes:
+        reason += f" ({len(notes)} catatan mutu, lihat render/quality.json)"
+    transition_job_state(db, job, JobState.PENDING_REVIEW, reason=reason)
     return True

@@ -43,6 +43,7 @@ STOP_QUEUE = "queue_exhausted"
 STOP_ATTEMPTS = "max_attempts"
 STOP_FAILED = "job_failed"
 STOP_REFILL = "refill_failed"
+STOP_COST_CAP = "run_cost_cap"
 
 
 @dataclass
@@ -89,12 +90,15 @@ def produce_scripts(
     search: BaseSearchProvider | None = None,
     footage: BaseFootageProvider | None = None,
     config: AppConfig | None = None,
+    max_cost_idr: float | None = None,
 ) -> ProduceReport:
     """Produce ``count`` recordable scripts, replacing every dropped topic with the next one.
 
     Dropping a topic is normal and never asks anything of the user (SPEC 7.3). The run is bounded
     by ``produce.max_attempts_per_script`` attempts per requested script, stops at the first
     failed job (which usually means a broken key or service) and at any budget or quota limit.
+    ``max_cost_idr`` caps the spending of this run: no new topic is started once it is reached
+    (a topic already under way is still bounded by the per-video budget).
     """
     config = config or get_config()
     llm = llm or get_llm_provider()
@@ -109,6 +113,14 @@ def produce_scripts(
         while len(report.ready_job_ids) < count:
             if len(report.attempts) >= max_attempts:
                 report.stopped = STOP_ATTEMPTS
+                break
+
+            if (
+                max_cost_idr is not None
+                and budget_status(db, config).month_idr - spent_before >= max_cost_idr
+            ):
+                report.stopped = STOP_COST_CAP
+                report.stop_detail = f"Rp{max_cost_idr:,.0f}"
                 break
 
             topic = _next_topic(db)
