@@ -67,6 +67,13 @@ footage:
   # with any of these words is not used for a fact video.
   avoid_tags: [fantasy, fiction, alien, ufo, spaceship, cartoon, anime, magic, dragon, christmas]
 
+render:
+  encoder: "libx264"  # libx264 (CPU, safest) or h264_nvenc (GPU)
+  preset: "veryfast"
+  crf_draft: 16
+  crf_final: 20
+  blur: 12
+
 subtitles:
   font_name: "Poppins"  # file in assets/fonts/
   font_size: 96
