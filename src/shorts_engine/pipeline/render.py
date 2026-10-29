@@ -11,6 +11,7 @@ from shorts_engine.db.base import get_data_dir
 from shorts_engine.db.models import Job, Script
 from shorts_engine.domain.state_machine import JobState, transition_job_state
 from shorts_engine.pipeline.audio import measure_loudness, probe_audio
+from shorts_engine.pipeline.data_graphics import create_graphics
 from shorts_engine.pipeline.description import write_description
 from shorts_engine.pipeline.footage import probe_video
 from shorts_engine.pipeline.shot_look import best_start, gamma_for, luma_profile
@@ -159,7 +160,7 @@ def render_video(job_id: str, job_dir: Path, config: AppConfig) -> Path:
         job_id,
         [
             "-i", video_only, "-i", "audio/narration.wav",
-            "-vf", "subtitles=subtitles/subtitles.ass:fontsdir=fonts",
+            "-vf", caption_filter(job_dir),
             "-map", "0:v:0", "-map", "1:a:0", *encoder_args(config, "final"),
             "-c:a", "aac", "-b:a", "192k", "-t", f"{duration:.3f}",
             "-movflags", "+faststart", "-f", "mp4", f"render/{temp.name}",
@@ -171,6 +172,14 @@ def render_video(job_id: str, job_dir: Path, config: AppConfig) -> Path:
     for name in (*shots, video_only):
         (job_dir / name).unlink(missing_ok=True)
     return final
+
+
+def caption_filter(job_dir: Path) -> str:
+    """Burn the data graphics first (when the script has any), then the captions on top."""
+    captions = "subtitles=subtitles/subtitles.ass:fontsdir=fonts"
+    if (job_dir / "subtitles" / "graphics.ass").is_file():
+        return f"subtitles=subtitles/graphics.ass:fontsdir=fonts,{captions}"
+    return captions
 
 
 def check_result(job_id: str, video: Path, narration_s: float) -> dict:
@@ -206,6 +215,9 @@ def run_rendering(
         if not (job_dir / "subtitles" / "subtitles.ass").is_file():
             parts = [script.hook, *[s["text"] for s in script.segments], script.ending]
             create_subtitles(job_dir, parts, config)
+        create_graphics(
+            job_dir, [script.hook, *[s["text"] for s in script.segments], script.ending], config
+        )
         final = render_video(job.id, job_dir, config)
         report = check_result(
             job.id, final, probe_audio(job_dir / "audio" / "narration.wav").duration_s

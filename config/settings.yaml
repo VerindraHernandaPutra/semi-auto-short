@@ -91,6 +91,11 @@ render:
   luma_target: 55  # dark clips are brightened towards this average (0-255)
   gamma_cap: 1.5
 
+graphics:
+  enabled: true  # before/after bars for two amounts in the same unit, drawn from the script text
+  max_per_video: 2
+  units: [miles, kilometers, km, meters, feet, degrees, percent, kg, tons, pounds, mph]
+
 subtitles:
   font_name: "Poppins"  # file in assets/fonts/
   font_size: 96
