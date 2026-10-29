@@ -50,6 +50,17 @@ speech:
   target_duration_min: 35
   target_duration_max: 55
 
+audio:
+  min_duration_s: 20
+  max_duration_s: 60
+  target_lufs: -16
+  true_peak_db: -1.5
+  silence_threshold_db: -45
+
+asr:
+  model: "small.en"  # faster-whisper model; downloaded once on first use
+  device: "auto"  # auto = GPU if CUDA works, else CPU
+
 search:
   depth: "basic"  # basic = 1 Tavily credit per search, advanced = 2
   max_results: 8  # one Tavily credit per search whatever the count

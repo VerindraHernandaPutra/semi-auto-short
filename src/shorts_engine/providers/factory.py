@@ -92,7 +92,12 @@ def get_footage_provider() -> BaseFootageProvider:
 
 def get_asr_provider() -> BaseASRProvider:
     if active_provider_names()["asr"] == "whisper":
-        return WhisperASRProvider()
+        asr = get_config().settings.get("asr", {})
+        return WhisperASRProvider(
+            model_name=asr.get("model", "small.en"),
+            device=asr.get("device", "auto"),
+            language=get_config().settings.get("content_language", "en"),
+        )
     if active_provider_names()["asr"] == "mock":
         return MockASRProvider()
     raise ValueError(f"Provider ASR tidak dikenal: {active_provider_names()['asr']}")
