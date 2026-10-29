@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import uuid
 
 from sqlalchemy.orm import Session
@@ -18,6 +19,7 @@ from shorts_engine.pipeline.script_rules import (
     find_unclaimed_overstatements,
     find_unsupported_names,
     length_problem,
+    spoken_text,
     word_budget,
 )
 from shorts_engine.providers.factory import get_llm_provider, is_mock_provider
@@ -131,8 +133,16 @@ def _statements(script_data: ScriptOutput, claims_by_id: dict[str, Claim]):
     for index, segment in enumerate(script_data.segments, start=1):
         statements.append((f"segment {index}", segment.text, segment.claim_ids))
     statements.append(("ending", script_data.ending, script_data.ending_claim_ids))
-    statements.append(("title", script_data.title_working, list(claims_by_id)))
+    statements.append(("title", _title_subject(script_data), list(claims_by_id)))
     return statements
+
+
+def _title_subject(script_data: ScriptOutput) -> str:
+    """The title without its series label and episode number, which are not factual statements."""
+    title = script_data.title_working
+    if script_data.series:
+        title = re.sub(re.escape(script_data.series), " ", title, flags=re.IGNORECASE)
+    return " ".join(re.sub(r"#\s*\d+", " ", title).split())
 
 
 def _spoken_parts(script_data: ScriptOutput) -> list[str]:
@@ -189,11 +199,17 @@ Rules:
 - Every factual sentence lists the claim_ids that back it. Openers, transitions and closing lines
   state no facts: mark them as framing and give them no claim_ids.
 - hook_claim_ids may contain only claims marked HOOK-ELIGIBLE.
+- Hook, title and ending follow the same rule as the body. Each is either a close restatement of
+  a cited claim, or framing that asserts nothing about the world. Promises ("here is why"), causes
+  ("why", "because") unless a claim states the cause, and general statements ("even a giant storm
+  can change") count as facts and need a claim. The title names the subject in words taken from the
+  claims. The ending restates a cited claim in a calm way, or is a short framing line with no fact.
 - Never add numbers, units, names or details that the claims do not contain, and never state
   anything stronger than a claim does. Words such as "only", "always", "never", "most" and
   superlatives are forbidden unless a claim says them.
 - Length: {low} to {high} words in total across the hook, segments and ending, spoken at
-  {speech["words_per_second"]} words per second. Use {min_segments} to {max_segments} body segments.
+  {speech["words_per_second"]} words per second. Aim for about {(low + high) // 2} words: drafts
+  below {low} words fail the length limit, and drafts usually come out shorter than planned. Use {min_segments} to {max_segments} body segments.
 - Sentences of 8 to 14 words. Use "you" at most once in the whole script.
 - Put a pronunciation hint in square brackets after hard words, for example
   cephalopod [SEF-uh-luh-pod]. Hints are not counted as spoken words.
@@ -294,7 +310,8 @@ def _model_checks(
     """Ask a separate model whether each statement is fully supported by its claims."""
     checks: list[dict] = []
     problems: list[str] = []
-    for label, text, claim_ids in _statements(draft, claims_by_id):
+    for label, written, claim_ids in _statements(draft, claims_by_id):
+        text = spoken_text(written)  # pronunciation hints are not claims and must not be judged
         prompt = (
             "Check whether this script statement is fully and accurately supported "
             "by the verified claims. Flag added specificity, unsupported details, "

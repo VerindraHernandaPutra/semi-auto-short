@@ -199,6 +199,16 @@ def test_names_must_appear_in_the_cited_claims():
     assert find_unsupported_names("Hawaii is first so it is ignored.", claims) == []
 
 
+def test_the_series_label_and_episode_number_in_a_title_are_not_checked_as_names(db_session):
+    make_job(db_session)
+    draft = valid_draft()
+    draft.series = "Everyone Gets This Wrong"
+    draft.title_working = "Everyone Gets This Wrong #3"
+    problems = script_problems(draft, claims_of(db_session), get_config())
+
+    assert not [p for p in problems if p.startswith("The title")]
+
+
 def test_second_person_is_counted():
     assert count_second_person("You may see it. Your eyes help.") == 2
 
@@ -329,6 +339,25 @@ def test_a_bad_draft_is_rewritten_with_feedback_and_the_version_records_it(db_se
         "script_check",
         "awaiting_voice",
     ]
+
+
+def test_the_model_check_sees_spoken_text_without_pronunciation_hints(db_session):
+    from shorts_engine.pipeline.script import _model_checks
+
+    make_job(db_session)
+    draft = valid_draft()
+    draft.hook = "A cephalopod [SEF-uh-luh-pod] strikes fast."
+    seen: list[str] = []
+
+    class Recorder(ScriptLLM):
+        def generate_structured(self, prompt, schema, model_name, effort=None):
+            seen.append(prompt)
+            return super().generate_structured(prompt, schema, model_name, effort)
+
+    _model_checks(Recorder([]), draft, claims_of(db_session), "m")
+
+    assert any("A cephalopod strikes fast." in prompt for prompt in seen)
+    assert not any("SEF-uh-luh-pod" in prompt for prompt in seen)
 
 
 def test_a_model_check_failure_triggers_a_rewrite_too(db_session):
