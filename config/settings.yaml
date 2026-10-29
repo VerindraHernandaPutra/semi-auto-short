@@ -57,6 +57,16 @@ audio:
   true_peak_db: -1.5
   silence_threshold_db: -45
 
+footage:
+  max_clip_mb: 60
+  allowed_download_hosts: ["cdn.pixabay.com"]
+  fallback_queries: ["space", "stars"]
+  # A clip must carry at least one of these tags (the channel's field), whatever else it matches.
+  required_tags_any: [space, stars, galaxy, universe, astronomy, planet, telescope, nebula, jupiter, mars, moon, sun, comet, asteroid, observatory]
+  # Tags that mark fiction. Pixabay tags are written by uploaders and can mislead, so a clip
+  # with any of these words is not used for a fact video.
+  avoid_tags: [fantasy, fiction, alien, ufo, spaceship, cartoon, anime, magic, dragon, christmas]
+
 subtitles:
   font_name: "Poppins"  # file in assets/fonts/
   font_size: 96

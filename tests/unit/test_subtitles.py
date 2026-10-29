@@ -92,3 +92,13 @@ def test_subtitles_file_is_written_for_a_matching_recording(tmp_path):
 
     assert path.name == "subtitles.ass" and "Jupiter" in path.read_text(encoding="utf-8")
     assert not (tmp_path / "subtitles" / "subtitles.tmp.ass").exists()
+
+
+def test_words_heard_as_written_keep_their_own_times():
+    words, share = align_script(
+        ["Hello", "big", "world."],
+        heard(("Hello", 0.0, 0.2), ("big", 1.0, 1.1), ("world.", 3.0, 3.5)),
+    )
+
+    assert share == 1.0
+    assert [(w.start, w.end) for w in words] == [(0.0, 0.2), (1.0, 1.1), (3.0, 3.5)]

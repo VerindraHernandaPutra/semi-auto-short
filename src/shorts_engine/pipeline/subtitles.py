@@ -49,7 +49,10 @@ def align_script(tokens: list[str], heard: list[dict]) -> tuple[list[TimedWord],
     for tag, i1, i2, j1, j2 in SequenceMatcher(None, wanted, got, autojunk=False).get_opcodes():
         if tag == "equal":
             matched += i2 - i1
-        if j2 > j1 and i2 > i1:
+            for offset in range(i2 - i1):  # same word: keep its own time
+                word = heard[j1 + offset]
+                times[i1 + offset] = (float(word["start"]), float(word["end"]))
+        elif j2 > j1 and i2 > i1:
             start, end = float(heard[j1]["start"]), float(heard[j2 - 1]["end"])
             weights = [len(wanted[i]) for i in range(i1, i2)]
             cursor = start

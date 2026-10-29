@@ -84,6 +84,7 @@ ALLOWED_TRANSITIONS = {
     },
     JobState.SELECTING_FOOTAGE: {
         JobState.RENDERING,
+        JobState.DROPPED,
         JobState.FAILED,
         JobState.CANCELLED,
     },
