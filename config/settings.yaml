@@ -86,6 +86,10 @@ render:
   crf_draft: 16
   crf_final: 20
   blur: 12
+  foreground: "square"  # square = middle of the clip fills 1080x1080; wide = whole landscape frame
+  zoom_max: 1.07  # slow push-in over each shot
+  luma_target: 55  # dark clips are brightened towards this average (0-255)
+  gamma_cap: 1.5
 
 subtitles:
   font_name: "Poppins"  # file in assets/fonts/
