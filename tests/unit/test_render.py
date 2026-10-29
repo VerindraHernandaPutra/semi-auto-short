@@ -50,14 +50,13 @@ def job_dir(tmp_path):
     return tmp_path
 
 
-def test_render_makes_a_vertical_video_with_sound_as_long_as_the_narration(job_dir):
+def test_render_makes_a_vertical_video_with_sound_and_a_quiet_ending_after_the_narration(job_dir):
     final = render_video("job_r", job_dir, get_config())
 
     width, height, duration = probe_video(final)
     assert (width, height) == (1080, 1920)
-    assert duration == pytest.approx(
-        probe_audio(job_dir / "audio" / "narration.wav").duration_s, abs=0.3
-    )
+    narration = probe_audio(job_dir / "audio" / "narration.wav").duration_s
+    assert duration == pytest.approx(narration + 1.2, abs=0.3)  # tail_s after the last word
     assert probe_audio(final).sample_rate > 0  # has an audio stream
     assert not (job_dir / "render" / "final.tmp.mp4").exists()
     assert not list((job_dir / "render").glob("shot_*.mp4"))  # intermediates cleaned up
@@ -166,3 +165,32 @@ def test_stage_fails_the_job_with_a_plain_message_when_material_is_missing(db_se
 
     assert run_rendering(db_session, job) is False
     assert job.status == JobState.FAILED.value
+
+
+def test_stale_subtitles_from_an_earlier_alignment_are_rebuilt(db_session):
+    db_session.add(Topic(id="t3", text="x", category="space"))
+    job = Job(id="job_st", topic_id="t3", status=JobState.RENDERING.value)
+    db_session.add(job)
+    text = "Jupiter is shrinking now and slowly"
+    db_session.add(
+        Script(id="s3", job_id="job_st", hook=text, segments=[], ending="", structure="x", status="passed")
+    )  # fmt: skip
+    db_session.commit()
+    folder = get_data_dir() / "jobs" / "job_st"
+    for name in ("audio", "footage", "subtitles"):
+        (folder / name).mkdir(parents=True)
+    ffmpeg(folder / "audio", "-f", "lavfi", "-i", "sine=f=220:d=5", "-ar", "48000", "-ac", "1", "narration.wav")  # fmt: skip
+    ffmpeg(folder / "footage", "-f", "lavfi", "-i", "testsrc=s=640x360:r=10:d=2", "-pix_fmt", "yuv420p", "c1.mp4")  # fmt: skip
+    plan = [
+        {"shot": 1, "file": "footage/c1.mp4", "needed_s": 5.3, "loop": True, "attribution": "x"}
+    ]
+    (folder / "footage" / "footage_plan.json").write_text(json.dumps(plan))
+    heard = [{"word": w, "start": i * 0.5, "end": i * 0.5 + 0.4} for i, w in enumerate(text.split())]  # fmt: skip
+    (folder / "audio" / "alignment.json").write_text(json.dumps(heard))
+    stale = folder / "subtitles" / "subtitles.ass"
+    stale.write_text("STALE FILE FROM AN OLDER ALIGNMENT")
+
+    assert run_rendering(db_session, job) is True
+
+    assert "STALE" not in stale.read_text(encoding="utf-8")
+    assert "Jupiter" in stale.read_text(encoding="utf-8")

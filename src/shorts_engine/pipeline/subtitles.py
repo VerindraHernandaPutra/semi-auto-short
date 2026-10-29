@@ -142,12 +142,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         following = chunks[position + 1][0].start if position + 1 < len(chunks) else None
         end = chunk[-1].end + TAIL_S if following is None else min(chunk[-1].end + 0.25, following)
         end = max(end, start + 0.2)
-        cursor = start
         parts = []
-        for word in chunk:
-            span = max(word.end - cursor, 0.01)
-            parts.append(f"{{\\k{round(span * 100)}}}{_escape(word.text)}")
-            cursor = word.end
+        for index, word in enumerate(chunk):
+            # Highlighted from its own start until the next word starts, so a pause stays with
+            # the word before and the highlight never runs ahead of the voice.
+            if index + 1 < len(chunk):
+                span = chunk[index + 1].start - word.start
+            else:
+                span = max(word.end - word.start, 0.2)
+            parts.append(f"{{\\k{round(max(span, 0.01) * 100)}}}{_escape(word.text)}")
         lines.append(f"Dialogue: 0,{_stamp(start)},{_stamp(end)},Main,,0,0,0,,{' '.join(parts)}")
     return header + "\n".join(lines) + "\n"
 

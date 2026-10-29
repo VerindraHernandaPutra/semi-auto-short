@@ -56,3 +56,20 @@ def to_sentences(parts: list[str]) -> list[str]:
         spoken = to_spoken(part)
         sentences += [s.strip() for s in _SENTENCE_END.split(spoken) if s.strip()]
     return sentences
+
+
+def spoken_words(part: str) -> list[tuple[str, list[str]]]:
+    """Each written word of ``part`` with the words a speaker says for it.
+
+    "24,200" becomes five spoken words; a plain word stays itself. The next written word is
+    used as context, because "2000 miles" and "in 2000" are read differently.
+    """
+    tokens = spoken_text(part).split()
+    pairs: list[tuple[str, list[str]]] = []
+    for index, token in enumerate(tokens):
+        following = tokens[index + 1] if index + 1 < len(tokens) else ""
+        together = to_spoken(f"{token} {following}").split()
+        context = to_spoken(following).split() if following else []
+        words = together[: len(together) - len(context)] if context else together
+        pairs.append((token, words))
+    return pairs

@@ -21,3 +21,6 @@ data/
 # Local-only test media
 /dummy_footage.mp4
 /test.wav
+
+# Music the user adds (licences are theirs to check)
+assets/music/

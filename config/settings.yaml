@@ -86,10 +86,27 @@ render:
   crf_draft: 16
   crf_final: 20
   blur: 12
+  transition_s: 0.25  # cross-fade between shots; 0 = hard cuts
+  tail_s: 1.2  # quiet ending after the last word, so the video does not stop abruptly
+  fade_out_s: 0.8  # picture and sound fade out over the end
   foreground: "square"  # square = middle of the clip fills 1080x1080; wide = whole landscape frame
   zoom_max: 1.07  # slow push-in over each shot
   luma_target: 55  # dark clips are brightened towards this average (0-255)
   gamma_cap: 1.5
+
+branding:
+  channel_name: ""  # your channel name; when set it appears as a watermark and as a white pop-up
+  watermark: true
+  popup_at_s: [3.0]  # seconds at which the white pop-up appears
+  popup_seconds: 2.6
+  title_card: true  # the video title over the first seconds
+  title_seconds: 2.5
+
+music:
+  mode: "ambient"  # off | ambient (synthesised pad, no licence) | tracks (your files in assets/music)
+  target_lufs: -23  # loudness of the music bed itself; the voice is at -16
+  gain_db: 0  # extra trim after that
+  duck: true  # music eases down by a few dB while the voice speaks
 
 graphics:
   enabled: true  # before/after bars for two amounts in the same unit, drawn from the script text

@@ -28,10 +28,10 @@ _NOW_AFTER = re.compile(r"^\s+(?:now|today|currently)\b", re.IGNORECASE)
 _BY_BEFORE = re.compile(r"\b[Bb]y\s+(?P<year>\d{4})\b[^.]*$")
 
 # Layout in a 1080x1920 frame: a card in the top band, above the picture.
-CARD_X, CARD_Y, CARD_W, CARD_H = 60, 40, 960, 360
+CARD_X, CARD_Y, CARD_W, CARD_H = 60, 130, 960, 360
 LABEL_X, BAR_X, BAR_MAX, BAR_H = 100, 100, 560, 56
-LABEL_Y = (85, 250)  # label above its bar
-BAR_Y = (150, 315)  # bar centre lines
+LABEL_Y = (175, 340)  # label above its bar
+BAR_Y = (240, 405)  # bar centre lines
 LABEL_SIZE = 40
 GROW_S = 0.6
 GREY_BLUE, YELLOW = "&HC8A078&", "&H00D7FF&"

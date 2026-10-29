@@ -11,9 +11,11 @@ from shorts_engine.db.base import get_data_dir
 from shorts_engine.db.models import Job, Script
 from shorts_engine.domain.state_machine import JobState, transition_job_state
 from shorts_engine.pipeline.audio import measure_loudness, probe_audio
+from shorts_engine.pipeline.branding import create_branding
 from shorts_engine.pipeline.data_graphics import create_graphics
 from shorts_engine.pipeline.description import write_description
 from shorts_engine.pipeline.footage import probe_video
+from shorts_engine.pipeline.music import prepare_music
 from shorts_engine.pipeline.shot_look import best_start, gamma_for, luma_profile
 from shorts_engine.pipeline.subtitles import SubtitleError, create_subtitles
 
@@ -138,48 +140,116 @@ def render_video(job_id: str, job_dir: Path, config: AppConfig) -> Path:
     error_log = render_dir / "ffmpeg_error.log"
     shutil.copytree(FONTS_SOURCE, job_dir / "fonts", dirs_exist_ok=True)
 
-    rendered = [render_shot(job_id, job_dir, shot, config) for shot in plan]
+    settings = config.settings.get("render", {})
+    fade = float(settings.get("transition_s", 0.25)) if len(plan) > 1 else 0.0
+    duration = probe_audio(narration).duration_s
+    total = output_length(duration, config)
+    tail = total - duration
+    rendered = []
+    for position, shot in enumerate(plan):
+        # each shot but the last is longer by the overlap its transition uses; the last one
+        # carries the quiet ending after the voice has finished
+        extra = fade if position < len(plan) - 1 else tail
+        needed = float(shot["needed_s"]) + extra
+        longer = {**shot, "needed_s": needed}
+        longer["loop"] = bool(shot.get("loop")) or float(shot.get("clip_s", needed)) < needed
+        rendered.append(render_shot(job_id, job_dir, longer, config))
     shots = [name for name, _ in rendered]
     (render_dir / "look.json").write_text(
         json.dumps([info for _, info in rendered], indent=2), encoding="utf-8"
     )
-    concat_list = render_dir / "shots.txt"
-    concat_list.write_text(
-        "".join(f"file '{Path(name).name}'\n" for name in shots), encoding="utf-8"
-    )
-    video_only = "render/video_only.mp4"
-    _ffmpeg(
-        job_id,
-        ["-f", "concat", "-safe", "0", "-i", "render/shots.txt", "-c", "copy", video_only],
-        job_dir, SHOT_TIMEOUT_S, error_log,
-    )  # fmt: skip
 
-    duration = probe_audio(narration).duration_s
+    music = prepare_music(job_id, job_dir, total, config)
     temp, final = render_dir / "final.tmp.mp4", render_dir / "final.mp4"
+    video_graph, video_label = join_shots([float(shot["needed_s"]) for shot in plan], fade)
+    ending = float(settings.get("fade_out_s", 0.8))
+    graph = (
+        f"{video_graph};[{video_label}]{caption_filter(job_dir)},"
+        f"fade=t=out:st={max(total - ending, 0):.3f}:d={ending}[vout]"
+    )
+    audio_index = len(shots)
+    inputs = [arg for name in shots for arg in ("-i", name)] + ["-i", "audio/narration.wav"]
+    if music is not None:
+        inputs += ["-i", f"render/{music.name}"]
+    graph += ";" + mix_audio(audio_index, config, tail, total, music is not None)
+    audio_map = "[aout]"
     _ffmpeg(
         job_id,
         [
-            "-i", video_only, "-i", "audio/narration.wav",
-            "-vf", caption_filter(job_dir),
-            "-map", "0:v:0", "-map", "1:a:0", *encoder_args(config, "final"),
-            "-c:a", "aac", "-b:a", "192k", "-t", f"{duration:.3f}",
-            "-movflags", "+faststart", "-f", "mp4", f"render/{temp.name}",
+            *inputs, "-filter_complex", graph, "-map", "[vout]", "-map", audio_map,
+            *encoder_args(config, "final"), "-c:a", "aac", "-b:a", "192k",
+            "-t", f"{total:.3f}", "-movflags", "+faststart", "-f", "mp4", f"render/{temp.name}",
         ],
         job_dir, FINAL_TIMEOUT_S, error_log,
     )  # fmt: skip
-    check_result(job_id, temp, duration)
+    check_result(job_id, temp, total)
     temp.replace(final)
-    for name in (*shots, video_only):
+    for name in shots:
         (job_dir / name).unlink(missing_ok=True)
     return final
 
 
+def join_shots(needed: list[float], fade: float) -> tuple[str, str]:
+    """Filter graph joining the shot inputs: cross-fades of ``fade`` seconds, or plain cuts.
+
+    Each shot except the last was rendered ``fade`` seconds longer, so the total length is the
+    sum of ``needed``. Returns the graph and the label of its output.
+    """
+    count = len(needed)
+    if count == 1:
+        return "[0:v]null[joined]", "joined"
+    if fade <= 0:
+        inputs = "".join(f"[{i}:v]" for i in range(count))
+        return f"{inputs}concat=n={count}:v=1:a=0[joined]", "joined"
+    steps, previous, elapsed = [], "0:v", 0.0
+    for index in range(1, count):
+        elapsed += needed[index - 1]
+        label = "joined" if index == count - 1 else f"x{index}"
+        steps.append(
+            f"[{previous}][{index}:v]xfade=transition=fade:duration={fade}:offset={elapsed:.3f}[{label}]"
+        )
+        previous = label
+    return ";".join(steps), "joined"
+
+
+def output_length(narration_s: float, config: AppConfig) -> float:
+    """Video length: the narration plus a quiet ending, so the video does not stop on the last word."""
+    return narration_s + float(config.settings.get("render", {}).get("tail_s", 1.2))
+
+
+def mix_audio(
+    narration_index: int, config: AppConfig, tail_s: float, total_s: float, with_music: bool
+) -> str:
+    """Narration (padded with silence for the ending) over a music bed that eases under the voice.
+
+    The result is labelled [aout] and fades out over the last ``fade_out_s`` seconds.
+    """
+    render = config.settings.get("render", {})
+    settings = config.settings.get("music", {})
+    ending = float(render.get("fade_out_s", 0.8))
+    fade = f"afade=t=out:st={max(total_s - ending, 0):.3f}:d={ending}"
+    padded = f"[{narration_index}:a]apad=pad_dur={tail_s:.3f}"
+    if not with_music:
+        return f"{padded},{fade}[aout]"
+    music = f"[{narration_index + 1}:a]volume={float(settings.get('gain_db', 0))}dB[mus]"
+    mix = f"amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.8:level=0,{fade}[aout]"
+    if settings.get("duck", True):
+        return (
+            f"{padded},asplit=2[nar][side];{music};"
+            "[mus][side]sidechaincompress=threshold=0.1:ratio=4:attack=30:release=500[duck];"
+            f"[nar][duck]{mix}"
+        )
+    return f"{padded}[nar];{music};[nar][mus]{mix}"
+
+
 def caption_filter(job_dir: Path) -> str:
-    """Burn the data graphics first (when the script has any), then the captions on top."""
-    captions = "subtitles=subtitles/subtitles.ass:fontsdir=fonts"
-    if (job_dir / "subtitles" / "graphics.ass").is_file():
-        return f"subtitles=subtitles/graphics.ass:fontsdir=fonts,{captions}"
-    return captions
+    """Burn the data graphics, then the branding, then the captions on top (those that exist)."""
+    layers = [
+        f"subtitles=subtitles/{name}.ass:fontsdir=fonts"
+        for name in ("graphics", "branding", "subtitles")
+        if (job_dir / "subtitles" / f"{name}.ass").is_file()
+    ]
+    return ",".join(layers)
 
 
 def check_result(job_id: str, video: Path, narration_s: float) -> dict:
@@ -212,16 +282,17 @@ def run_rendering(
         transition_job_state(db, job, JobState.FAILED, reason="Naskah tidak ditemukan")
         return False
     try:
-        if not (job_dir / "subtitles" / "subtitles.ass").is_file():
-            parts = [script.hook, *[s["text"] for s in script.segments], script.ending]
-            create_subtitles(job_dir, parts, config)
+        # Always rebuilt: a file left from an earlier alignment would show stale times.
+        parts = [script.hook, *[s["text"] for s in script.segments], script.ending]
+        create_subtitles(job_dir, parts, config)
         create_graphics(
             job_dir, [script.hook, *[s["text"] for s in script.segments], script.ending], config
         )
+        results = script.check_results or {}
+        length = output_length(probe_audio(job_dir / "audio" / "narration.wav").duration_s, config)
+        create_branding(job_dir, str(results.get("title_working", "")), length, config)
         final = render_video(job.id, job_dir, config)
-        report = check_result(
-            job.id, final, probe_audio(job_dir / "audio" / "narration.wav").duration_s
-        )
+        report = check_result(job.id, final, length)
         write_description(db, job, job_dir, config)
         (job_dir / "render" / "report.json").write_text(
             json.dumps(report, indent=2), encoding="utf-8"

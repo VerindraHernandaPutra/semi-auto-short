@@ -8,8 +8,10 @@ from sqlalchemy.orm import Session
 
 from shorts_engine.config import AppConfig, get_config
 from shorts_engine.db.base import get_data_dir
-from shorts_engine.db.models import Job
+from shorts_engine.db.models import Job, Script
 from shorts_engine.domain.state_machine import JobState, transition_job_state
+from shorts_engine.pipeline.forced_align import force_align
+from shorts_engine.pipeline.subtitles import MIN_MATCH_SHARE, align_script, script_tokens
 from shorts_engine.providers.asr.base import BaseASRProvider
 from shorts_engine.providers.factory import get_asr_provider
 
@@ -180,6 +182,37 @@ def extract_words(result: dict) -> list[dict]:
     ]
 
 
+def refine_with_script(
+    db: Session, job: Job, narration: Path, words: list[dict]
+) -> tuple[list[dict], str]:
+    """Word times from the script text when the script is known; Whisper's otherwise.
+
+    Whisper is first used to confirm the recording follows the script. The times then come from
+    forced alignment of the script's own words, which is more exact, and the written words are
+    the script's (digits stay digits). If alignment fails, Whisper's times are kept.
+    """
+    script = db.query(Script).filter(Script.job_id == job.id).first()
+    if script is None:
+        return words, "whisper"
+    parts = [script.hook, *[segment["text"] for segment in script.segments], script.ending]
+    share = align_script(script_tokens(parts), words)[1]
+    if share < MIN_MATCH_SHARE:
+        raise AudioError(
+            job.id,
+            f"Rekaman tidak cocok dengan naskah ({share:.0%} kata sama). "
+            "Bacalah naskah apa adanya, lalu rekam ulang.",
+        )
+    try:
+        forced = force_align(narration, parts)
+    except Exception as exc:  # an enhancement: never lose the video because of it
+        logger.warning("forced alignment skipped for %s: %s", job.id, exc)
+        return words, "whisper"
+    if any(word.end < word.start for word in forced):
+        return words, "whisper"
+    refined = [{"word": w.text, "start": round(w.start, 3), "end": round(w.end, 3)} for w in forced]
+    return refined, "forced"
+
+
 def run_audio_alignment(
     db: Session,
     job: Job,
@@ -195,8 +228,15 @@ def run_audio_alignment(
         words = extract_words((asr or get_asr_provider()).transcribe(str(narration)))
         if not words:
             raise AudioError(job.id, "Tidak ada ucapan yang terdeteksi pada rekaman.")
+        (job_dir / "alignment_whisper.json").write_text(
+            json.dumps(words, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        words, method = refine_with_script(db, job, narration, words)
         (job_dir / "alignment.json").write_text(
             json.dumps(words, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        (job_dir / "alignment_info.json").write_text(
+            json.dumps({"method": method}), encoding="utf-8"
         )
     except AudioError as exc:
         transition_job_state(db, job, JobState.FAILED, reason=str(exc))
