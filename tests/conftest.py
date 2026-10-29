@@ -1,9 +1,12 @@
 import os
+import tempfile
 
 import pytest
 
-# Must run before shorts_engine is imported: keep a developer's real .env out of the tests.
+# Must run before shorts_engine is imported. Keep a developer's real .env and real data out of
+# the tests: the module-level database engine and every job folder follow DATA_DIR.
 os.environ["SHORTS_ENV_FILE"] = ""
+os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="shorts-engine-tests-")
 
 
 @pytest.fixture(autouse=True)

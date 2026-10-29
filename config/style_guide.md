@@ -47,7 +47,7 @@ Each script belongs to one series. Story structures are defined in `config/topic
 
 | Series | Structure | Categories | Hook pattern |
 |---|---|---|---|
-| **Everyone Gets This Wrong** | misconception → fact → reason | all | "Most of us picture X. That's not quite right." |
+| **Everyone Gets This Wrong** | misconception → fact → reason | all | "We often picture X. That's not quite right." |
 | **Strange Creatures** | observation → mechanism → conclusion | animals, ocean | "This animal does X. Here's how." |
 | **Science at Home** | question → explanation → consequence | everyday phenomena | "Why does X happen when you Y?" |
 

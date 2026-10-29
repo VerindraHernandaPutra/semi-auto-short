@@ -3,7 +3,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from shorts_engine.db.base import Base
-from shorts_engine.db.models import Claim, Job, JobEvent, Script, Source, Topic
+from shorts_engine.db.models import Claim, Job, JobEvent, Source, Topic
 from shorts_engine.domain.schemas import (
     ClaimCandidate,
     ClaimSupportCheck,
@@ -21,6 +21,7 @@ from shorts_engine.pipeline.claim_validation import (
 from shorts_engine.pipeline.script import _validate_references, run_script
 from shorts_engine.pipeline.verify import run_verify
 from shorts_engine.providers import factory
+from shorts_engine.providers.search.base import BaseSearchProvider
 from shorts_engine.providers.search.tiers import (
     classify_domain,
     source_independence_domain,
@@ -63,6 +64,26 @@ def test_quote_similarity_rejects_unrelated_quote():
         ("It dives 30 meters.", "It dives deep.", False),
         ("It dives three meters.", "It dives two meters.", False),
         ("It dives deep.", "It dives deep.", True),
+        ("Some species have more than 10 pigments.", "Some have more than ten pigments.", True),
+        ("It has ten arms.", "It has 10 arms.", True),
+        ("It has twelve arms.", "It has ten arms.", False),
+        ("It lays a dozen eggs.", "It lays 12 eggs.", True),
+        ("It lays 3 eggs.", "It lays three eggs.", True),
+        # The same measurement written another way is still the same measurement.
+        ("It reaches 23 meters per second.", "Speeds of 12-23 m/s in water.", True),
+        ("Its club moves at 12 to 23 meters per second.", "Speeds of 12-23 m/s in water.", True),
+        ("It moves 23 kilometers per hour.", "Speeds of 12-23 m/s in water.", False),
+        ("It travels five feet.", "It travels 5 ft.", True),
+        ("It waits ten seconds.", "It waits 10 s.", True),
+        ("It weighs 3 kilograms.", "It weighs 3 kg.", True),
+        ("It rests 30 minutes.", "It rests 30 min.", True),
+        ("It is 1 foot long.", "It is one foot long.", True),
+        ("It is 2 feet long.", "It is one foot long.", False),
+        # "one" as a pronoun is not a measurement; "one meter" still is.
+        ("It is one of the fastest strikes.", "Speeds of 12-23 m/s in water.", True),
+        ("In one strike the club reaches 23 m/s.", "Speeds of 12-23 m/s in water.", True),
+        ("It travels one meter.", "It travels 2 meters.", False),
+        ("It travels one meter.", "It travels 1 meter.", True),
     ],
 )
 def test_numeric_facts_require_matching_number_and_unit(claim, quote, supported):
@@ -119,6 +140,11 @@ def test_mock_provider_cannot_create_recordable_script(db_session, monkeypatch):
     assert job.status == JobState.DROPPED.value
     event = db_session.query(JobEvent).one()
     assert event.reason == "mock_provider_not_allowed_for_production_script"
+
+
+class NullSearch(BaseSearchProvider):
+    def search_and_extract(self, queries):
+        return []
 
 
 class VerifiedFakeLLM:
@@ -191,7 +217,7 @@ def test_claim_verification_requires_quotes_and_independent_hook_domains(
         ),
     ]
     monkeypatch.setattr(verify_module, "get_llm_provider", lambda: VerifiedFakeLLM(candidates))
-    monkeypatch.setattr(verify_module, "get_search_provider", lambda: object())
+    monkeypatch.setattr(verify_module, "get_search_provider", lambda: NullSearch())
 
     assert run_verify(db_session, job) is True
     verified_claims = (
@@ -233,7 +259,7 @@ def test_hook_claim_from_one_domain_is_not_verified(db_session, monkeypatch, tmp
         ),
     ]
     monkeypatch.setattr(verify_module, "get_llm_provider", lambda: VerifiedFakeLLM(candidates))
-    monkeypatch.setattr(verify_module, "get_search_provider", lambda: object())
+    monkeypatch.setattr(verify_module, "get_search_provider", lambda: NullSearch())
 
     assert run_verify(db_session, job) is False
     # is_hook means "confirmed by two independent domains", so the failed candidate is not flagged.
@@ -261,6 +287,7 @@ def test_script_requires_known_claim_ids_and_factual_segment_references():
             )
         ],
         ending="A quiet ending.",
+        ending_kind="framing",
         story_structure="observation-mechanism-conclusion",
         series="Strange Creatures",
         estimated_duration_s=40,
@@ -295,6 +322,7 @@ def test_factual_script_cannot_introduce_unsupported_number():
             )
         ],
         ending="A quiet ending.",
+        ending_kind="framing",
         story_structure="observation-mechanism-conclusion",
         series="Strange Creatures",
         estimated_duration_s=40,
@@ -326,63 +354,21 @@ class ValidatingFakeLLM:
         raise AssertionError(f"Unexpected schema requested: {schema.__name__}")
 
 
-def test_valid_script_is_audited_before_job_becomes_recordable(db_session, monkeypatch):
-    import shorts_engine.pipeline.script as script_module
+def test_unsupported_numbers_are_listed_for_the_rewrite_feedback():
+    from shorts_engine.pipeline.claim_validation import unsupported_numeric_facts
 
-    job = make_job(db_session)
-    script_data = ScriptOutput(
-        title_working="How octopuses change color",
-        hook="Octopuses can change color quickly.",
-        hook_claim_ids=["claim_1"],
-        segments=[
-            ScriptSegment(
-                text="Octopuses can change color quickly.",
-                claim_ids=["claim_1"],
-                kind="factual",
-                visual_suggestion="An octopus changing color",
-            ),
-            ScriptSegment(
-                text="The change is easy to miss.",
-                claim_ids=[],
-                kind="framing",
-                visual_suggestion="An octopus in the ocean",
-            ),
-        ],
-        ending="A small shift can change the whole scene.",
-        story_structure="observation-mechanism-conclusion",
-        series="Strange Creatures",
-        estimated_duration_s=40,
-    )
-    for index, claim_text in enumerate(
-        [
-            "Octopuses can change color quickly.",
-            "Chromatophores are pigment cells.",
-            "Muscles control chromatophore expansion.",
-        ],
-        start=1,
-    ):
-        db_session.add(
-            Claim(
-                id=f"claim_{index}",
-                job_id=job.id,
-                source_ids=[f"source_{index}"],
-                text=claim_text,
-                supporting_quote=claim_text,
-                quote_match_score=1.0,
-                support_check="supports",
-                status="verified",
-                is_hook=index == 1,
-            )
-        )
-    db_session.commit()
-    monkeypatch.setattr(
-        script_module,
-        "get_llm_provider",
-        lambda: ValidatingFakeLLM(script_data),
-    )
+    claim = "Speeds of 12-23 m/s in water."
 
-    assert run_script(db_session, job) is True
-    assert job.status == JobState.AWAITING_VOICE.value
-    stored_script = db_session.query(Script).filter(Script.job_id == job.id).one()
-    assert stored_script.check_results["hook_claim_ids"] == ["claim_1"]
-    assert len(stored_script.check_results["script_claim_checks"]) == 5
+    assert unsupported_numeric_facts("It hits 40 meters per second.", claim) == ["40 m"]
+    assert unsupported_numeric_facts("It hits 23 m/s.", claim) == []
+    assert unsupported_numeric_facts("Two billion dollars.", "Nothing.") == ["1000000000", "2"]
+
+
+def test_claim_overlap_hints_at_facts_another_source_states():
+    from shorts_engine.pipeline.claim_validation import claim_overlap
+
+    claim = "Martian dust contains iron oxide."
+
+    assert claim_overlap(claim, "Scientists say the dust on Mars contains iron oxide, like rust.")
+    assert not claim_overlap(claim, "Venus rotates backwards compared with most planets.")
+    assert not claim_overlap("", "anything")

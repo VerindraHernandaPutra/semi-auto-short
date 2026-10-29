@@ -13,7 +13,11 @@ class ScriptSegment(BaseModel):
         description="IDs of the verified claims backing this segment; empty for framing",
     )
     kind: Literal["factual", "framing"] = Field(
-        "factual", description="Whether the segment states facts or is only a transition/framing"
+        ...,
+        description=(
+            "'factual' if the segment states any fact, 'framing' if it is only an opener, "
+            "transition or closing line. Always set it explicitly."
+        ),
     )
     visual_suggestion: str = Field(..., description="Visual idea used to search for stock footage")
 
@@ -28,7 +32,7 @@ class ScriptOutput(BaseModel):
     segments: list[ScriptSegment] = Field(..., description="Main body segments of the script")
     ending: str = Field(..., description="Calm closing line")
     ending_kind: Literal["factual", "framing"] = Field(
-        "framing", description="Whether the ending contains a factual statement"
+        ..., description="'factual' if the ending states a fact, otherwise 'framing'"
     )
     ending_claim_ids: list[str] = Field(
         default_factory=list,

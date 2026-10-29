@@ -31,9 +31,17 @@ QUOTE_B = "octopus skin can change color quickly"
 class ScriptedLLM(BaseLLMProvider):
     """Answers each schema from a script and counts calls, so tests can assert on cost."""
 
-    def __init__(self, candidates=None, found=None, support="supports", corroboration_error=None):
+    def __init__(
+        self,
+        candidates=None,
+        found=None,
+        support="supports",
+        corroboration_error=None,
+        found_by_claim=None,
+    ):
         self.candidates = candidates or []
         self.found = found or {}  # source id -> quote the model claims to have found
+        self.found_by_claim = found_by_claim or {}  # claim text -> {source id -> quote}
         self.support = support
         self.corroboration_error = corroboration_error
         self.corroboration_calls: list[str] = []
@@ -47,7 +55,8 @@ class ScriptedLLM(BaseLLMProvider):
             self.corroboration_calls.append(source_id)
             if self.corroboration_error:
                 raise self.corroboration_error
-            quote = self.found.get(source_id)
+            claim = re.search(r"Claim: (.*)", prompt).group(1).strip()
+            quote = self.found_by_claim.get(claim, self.found).get(source_id)
             return CorroborationResult(
                 found=quote is not None, supporting_quote=quote or "", reason="scripted"
             )
@@ -62,7 +71,7 @@ def sources(*pairs):
 
 
 def corroborate(llm, candidates, covered=("nature.com",), claim=CLAIM, wanted=1):
-    return find_corroboration(claim, set(covered), candidates, llm, "m", 0.92, wanted)
+    return find_corroboration(claim, set(covered), candidates, llm, "m", 0.92, wanted).evidence
 
 
 # ---------------------------------------------------------------- the corroboration step
@@ -270,15 +279,78 @@ def test_only_one_hook_is_confirmed_and_extra_hook_flags_stay_ordinary_claims(db
 
 
 def test_the_number_of_hook_candidates_tried_is_capped(db_session, tmp_path):
+    cap = get_config().settings["verification"]["max_hook_candidates"]
     job = setup_job(db_session, tmp_path, TWO_SOURCES)
-    extra = [candidate(f"Fact {i} about octopus skin.", "source_a", hook=True) for i in range(3)]
-    texts = TEXT_A + " " + " ".join(f"Fact {i} about octopus skin." for i in range(3))
+    extra = [candidate(f"Fact {i} about octopus skin.", "source_a", hook=(i < 3)) for i in range(6)]
+    texts = TEXT_A + " " + " ".join(f"Fact {i} about octopus skin." for i in range(6))
     (tmp_path / "source_a.txt").write_text(texts, encoding="utf-8")
-    llm = ScriptedLLM([*extra, BASE_CANDIDATES[2]], found={})
+    llm = ScriptedLLM(extra, found={})
 
     assert verify(db_session, job, llm) is False
 
-    assert len(llm.corroboration_calls) == 2  # max_hook_candidates, one other source each
+    assert len(llm.corroboration_calls) == cap  # flagged and alternate candidates share the cap
+
+
+def test_another_verified_claim_becomes_the_hook_when_the_models_pick_has_one_source(
+    db_session, tmp_path
+):
+    text_a = (
+        f"{CLAIM} Chromatophores are pigment cells in octopus skin. "
+        "Muscles expand the cells in octopus skin. The pigment cells sit just under the surface."
+    )
+    job = setup_job(
+        db_session, tmp_path, {"source_a": ("nature.com", text_a), "source_b": ("noaa.gov", TEXT_B)}
+    )
+    muscles = "Muscles expand the cells."
+    candidates = [
+        candidate(CLAIM, "source_a", hook=True),  # the model's pick: only one source has it
+        candidate("Chromatophores are pigment cells in octopus skin.", "source_a"),
+        candidate(muscles, "source_a", quote="Muscles expand the cells"),
+        candidate("The pigment cells sit just under the surface.", "source_a"),
+    ]
+    llm = ScriptedLLM(
+        candidates, found_by_claim={muscles: {"source_b": "Muscles expand the cells"}}
+    )
+
+    assert verify(db_session, job, llm) is True
+
+    hook = db_session.query(Claim).filter(Claim.is_hook.is_(True)).one()
+    assert hook.text == muscles and hook.source_ids == ["source_a", "source_b"]
+    rejected = db_session.query(Claim).filter(Claim.status == "rejected").all()
+    assert [c.text for c in rejected] == [CLAIM]  # the failed pick is still rejected
+    assert db_session.query(Claim).filter(Claim.status == "verified").count() == 3
+    # the model's pick first, then the claim another source seems to state (not extraction order)
+    assert llm.corroboration_calls == ["source_b", "source_b"]
+    chromatophores = db_session.query(Claim).filter(Claim.text.like("Chromatophores%")).one()
+    assert chromatophores.status == "verified" and chromatophores.is_hook is False
+
+
+def test_an_alternate_that_fails_stays_an_ordinary_verified_claim(db_session, tmp_path):
+    job = setup_job(db_session, tmp_path, TWO_SOURCES)
+    llm = ScriptedLLM(BASE_CANDIDATES, found={})
+
+    assert verify(db_session, job, llm) is False  # no hook at all, so the topic is dropped
+
+    statuses = {c.text: c.status for c in db_session.query(Claim)}
+    assert statuses["Chromatophores are pigment cells in octopus skin."] == "verified"
+    assert statuses["Muscles expand the cells."] == "verified"
+
+
+def test_the_extraction_prompt_asks_for_single_fully_quoted_facts():
+    from shorts_engine.pipeline.claim_validation import build_extraction_prompt
+
+    prompt = " ".join(
+        build_extraction_prompt("How a mantis shrimp strikes", "SOURCE-TEXT", 12).split()
+    )
+
+    assert "How a mantis shrimp strikes" in prompt and "SOURCE-TEXT" in prompt
+    assert "ONE simple fact" in prompt
+    assert "do not name a more specific species" in prompt
+    assert "no ellipses" in prompt
+    assert "Choose ONE hook fact" in prompt and "once for EACH source" in prompt
+    assert "identical claim wording" in prompt
+    assert "at most 12 claims" in prompt
+    assert "Ekstrak" not in prompt
 
 
 # ---------------------------------------------------------------- the script respects the rule
@@ -298,6 +370,7 @@ def hook_script(hook_ids):
             )
         ],
         ending="A quiet ending.",
+        ending_kind="framing",
         story_structure="observation-mechanism-conclusion",
         series="Strange Creatures",
         estimated_duration_s=40,
@@ -321,7 +394,8 @@ def make_claim(is_hook):
 def test_a_script_cannot_open_with_a_claim_that_was_not_confirmed_by_two_sources():
     error = _validate_references(hook_script(["claim_1"]), {"claim_1": make_claim(False)})
 
-    assert error == "Hook must rest on a claim confirmed by two independent sources"
+    assert error.startswith("Hook must rest on a claim confirmed by two independent sources")
+    assert "claim_1 is not one" in error  # it names the offending claim
 
 
 def test_a_script_may_open_with_a_confirmed_hook_claim():

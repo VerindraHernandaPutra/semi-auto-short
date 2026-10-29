@@ -12,14 +12,17 @@ from tavily.errors import TimeoutError as TavilyTimeoutError
 
 from shorts_engine.config import get_config
 from shorts_engine.db.base import Base
-from shorts_engine.db.models import Claim, CostEntry, Job, Source, Topic
+from shorts_engine.db.models import Claim, CostEntry, Job, JobEvent, Source, Topic
 from shorts_engine.domain.schemas import ExtractedClaims, ScriptOutput, SearchQueries
 from shorts_engine.domain.state_machine import JobState
 from shorts_engine.pipeline.research import (
     build_query_prompt,
+    clean_page_text,
     clean_queries,
+    describe_rejections,
     run_research,
     select_sources,
+    triage_sources,
 )
 from shorts_engine.pipeline.script import run_script
 from shorts_engine.pipeline.verify import run_verify
@@ -387,6 +390,7 @@ def test_script_generation_cost_is_recorded_even_when_it_fails(db_session):
             quote_match_score=1.0,
             support_check="supports",
             status="verified",
+            is_hook=True,
         )
     )
     db_session.commit()
@@ -499,3 +503,141 @@ def test_searches_are_bounded_by_a_timeout_and_ask_for_usage():
     assert client.calls[0]["timeout"] == 30.0
     assert client.calls[0]["include_usage"] is True
     assert SimpleNamespace(**client.calls[0]).search_depth == "basic"
+
+
+# ---------------------------------------------------------------- explaining empty results
+
+
+def test_every_rejected_page_carries_a_reason():
+    results = [
+        page("https://www.nasa.gov/a"),
+        page("https://nasa.gov/a/"),  # same page again
+        page("https://www.nasa.gov/b"),
+        page("https://www.nasa.gov/c"),  # beyond the per-domain cap of 2
+        page("https://facebook.com/post"),
+        page("https://en.wikipedia.org/wiki/X"),
+        page("https://www.bbc.com/short", content="menu"),
+        {"url": "not a url", "content": LONG_TEXT},
+    ]
+
+    chosen, rejected = triage_sources(results, WHITELIST, 6, 2, 10_000)
+
+    assert [c["url"] for c in chosen] == ["https://www.nasa.gov/a", "https://www.nasa.gov/b"]
+    reasons = {(r["domain"], r["reason"]) for r in rejected}
+    assert reasons == {
+        ("nasa.gov", "duplicate_url"),
+        ("nasa.gov", "domain_cap"),
+        ("facebook.com", "unlisted"),
+        ("en.wikipedia.org", "tier_c"),
+        ("bbc.com", "too_short"),
+        ("", "no_host"),
+    }
+
+
+def test_the_total_limit_is_reported_as_a_reason_too():
+    results = [page("https://nasa.gov/a"), page("https://nature.com/b"), page("https://mit.edu/c")]
+
+    chosen, rejected = triage_sources(results, WHITELIST, 2, 2, 10_000)
+
+    assert len(chosen) == 2 and [r["reason"] for r in rejected] == ["over_limit"]
+
+
+def test_rejections_are_summarised_as_counts():
+    rejected = [{"reason": "unlisted"}] * 5 + [{"reason": "tier_c"}]
+
+    assert describe_rejections(rejected) == "1 tier_c, 5 unlisted"
+    assert describe_rejections([]) == ""
+
+
+def test_a_dropped_topic_explains_why_no_source_qualified(db_session, data_dir):
+    job = make_job(db_session)
+    results = [
+        page("https://facebook.com/a"),
+        page("https://youtube.com/b"),
+        page("https://en.wikipedia.org/wiki/X"),
+    ]
+
+    assert research(db_session, job, search=FakeSearch(results)) is False
+
+    reason = db_session.query(JobEvent).order_by(JobEvent.id.desc()).first().reason
+    assert reason == "insufficient_sources:0_domains (3 results; rejected: 1 tier_c, 2 unlisted)"
+
+
+def test_the_summary_file_keeps_the_rejected_domains_even_when_the_topic_is_dropped(
+    db_session, data_dir
+):
+    import json
+
+    job = make_job(db_session)
+    results = [page("https://pubmed.example.org/x"), page("https://nasa.gov/a")]
+
+    research(db_session, job, search=FakeSearch(results))
+
+    summary = json.loads((data_dir / "jobs" / "job_1" / "research" / "summary.json").read_text())
+    assert summary["queries"] == ["q one", "q two"]
+    assert summary["results_total"] == 2
+    assert summary["rejected"] == [
+        {
+            "domain": "pubmed.example.org",
+            "url": "https://pubmed.example.org/x",
+            "reason": "unlisted",
+        }
+    ]
+    assert [k["domain"] for k in summary["kept"]] == ["nasa.gov"]
+    assert job.status == JobState.DROPPED.value  # only one domain, but the evidence is kept
+
+
+def test_a_successful_run_writes_the_summary_too(db_session, data_dir):
+    job = make_job(db_session)
+
+    research(db_session, job, search=FakeSearch(GOOD_RESULTS))
+
+    assert (data_dir / "jobs" / "job_1" / "research" / "summary.json").is_file()
+    assert job.status == JobState.VERIFYING.value
+
+
+# ---------------------------------------------------------------- menus are not evidence
+
+NAV = "\n".join(
+    [
+        "![NASA Logo](https://www.nasa.gov/logo.png)",
+        "### News & Events",
+        "### Multimedia",
+        "[Missions](https://nasa.gov/missions)",
+        "[Humans in Space](https://nasa.gov/humans)",
+        "## Suggested Searches",
+        "https://nasa.gov/x",
+        "",
+    ]
+)
+
+
+ARTICLE = (
+    "Jupiter's Great Red Spot is a storm that has been observed for more than a century. "
+    "Observations show that the storm has become smaller and taller over the years. " * 4
+)
+
+
+def test_menus_logos_and_link_lists_are_removed_but_prose_is_kept():
+    cleaned = clean_page_text(NAV + ARTICLE)
+
+    assert "NASA Logo" not in cleaned and "News & Events" not in cleaned and "http" not in cleaned
+    assert cleaned.startswith("Jupiter's Great Red Spot is a storm")
+    assert clean_page_text(
+        "[a linked sentence with enough words in it to count as prose](https://x.org)"
+    ) == ("a linked sentence with enough words in it to count as prose")
+
+
+def test_a_page_that_is_only_navigation_is_rejected_as_too_short():
+    chosen, rejected = triage_sources(
+        [page("https://nasa.gov/a", content=NAV * 60)], WHITELIST, 6, 2, 10_000
+    )
+
+    assert chosen == [] and rejected[0]["reason"] == "too_short"
+
+
+def test_the_character_budget_is_spent_on_the_article_not_the_menu():
+    raw = NAV * 400 + ARTICLE  # menu longer than the budget, article behind it
+    chosen, _ = triage_sources([page("https://nasa.gov/a", content=raw)], WHITELIST, 6, 2, 600)
+
+    assert chosen and chosen[0]["content"].startswith("Jupiter's Great Red Spot")

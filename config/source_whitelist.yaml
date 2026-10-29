@@ -5,6 +5,14 @@ tier_a:
   - nature.com
   - sciencemag.org
   - .edu
+  - .gov  # government science agencies, e.g. NIH, NIST, USGS
+  - .ac.uk  # UK universities
+  - science.org  # journal Science (sciencemag.org redirects here)
+  - pnas.org
+  - academic.oup.com  # Oxford University Press journals
+  - royalsocietypublishing.org
+  - plos.org
+  - cell.com
 
 tier_b:
   - nationalgeographic.com
@@ -12,6 +20,7 @@ tier_b:
   - bbc.com
   - livescience.com
   - scientificamerican.com
+  - pbs.org
 
 tier_c:
   - wikipedia.org

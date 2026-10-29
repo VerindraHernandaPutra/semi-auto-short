@@ -64,6 +64,7 @@ class MockLLMProvider(BaseLLMProvider):
                     )
                 ],
                 ending="This is a mock ending.",
+                ending_kind="framing",
                 estimated_duration_s=40,
                 story_structure="Mock structure",
                 series="Mock Series",

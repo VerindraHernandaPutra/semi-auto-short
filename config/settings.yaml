@@ -30,7 +30,10 @@ verification:
   min_verified_claims: 3
   quote_similarity_threshold: 0.92
   hook_min_domains: 2  # SPEC 7.3 rule 5
-  max_hook_candidates: 2  # claims tried as the hook before giving up
+  max_hook_candidates: 4  # claims tried as the hook before giving up
+  max_claims_extracted: 12
+  corroboration_search: true  # search for a second source for each hook candidate
+  max_corroboration_searches: 4  # at most one search (1 Tavily credit) per hook candidate
 
 topic_queue:
   min_queue_size: 10
@@ -49,7 +52,7 @@ speech:
 
 search:
   depth: "basic"  # basic = 1 Tavily credit per search, advanced = 2
-  max_results: 3
+  max_results: 8  # one Tavily credit per search whatever the count
   credit_usd: 0.0  # free plan; set 0.008 if you move to pay-as-you-go
   monthly_credit_limit: 900  # the free plan gives 1000; stop before it overflows
 
@@ -59,3 +62,37 @@ research:
   max_sources: 6  # SPEC 7.2: the top 3-6 tier A/B pages
   max_sources_per_domain: 2
   max_chars_per_source: 12000  # about 3K tokens each; bounds the Sonnet extraction cost
+
+script:
+  max_rewrites: 2  # SPEC 7.4: rewrite at most twice, then drop the topic
+  min_body_segments: 3
+  max_body_segments: 5
+  max_second_person_uses: 1  # style guide: address the viewer as "you" at most once
+  forbidden_phrases:  # style guide: no filler openers and no calls to action
+    - did you know
+    - hey guys
+    - in today's video
+    - like and subscribe
+    - follow for more
+    - subscribe
+    - comment below
+  overstatement_words:  # allowed only when a cited claim states the word itself
+    - the only
+    - always
+    - never
+    - most
+    - insane
+    - mind-blowing
+    - biggest
+    - largest
+    - smallest
+    - fastest
+    - slowest
+    - strongest
+    - deadliest
+    - smartest
+    - best
+    - worst
+
+produce:
+  max_attempts_per_script: 3  # topics tried per requested script before the run stops

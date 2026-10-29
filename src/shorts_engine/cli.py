@@ -1,5 +1,4 @@
 import sqlite3
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -33,21 +32,27 @@ from shorts_engine.logging_config import configure_logging
 from shorts_engine.pipeline.audio import run_audio_alignment
 from shorts_engine.pipeline.footage import run_footage_selection
 from shorts_engine.pipeline.render import run_rendering
-from shorts_engine.pipeline.research import run_research
-from shorts_engine.pipeline.script import run_script
 from shorts_engine.pipeline.topics import (
     STATUS_QUEUED,
     TopicGenerationError,
     refill_topic_queue,
 )
-from shorts_engine.pipeline.verify import run_verify
 from shorts_engine.providers.factory import use_mock_providers
 from shorts_engine.services.costs import (
     BudgetExceeded,
     SearchQuotaExceeded,
     cost_report,
 )
-from shorts_engine.services.jobs import release_unstarted_job
+from shorts_engine.services.produce import (
+    STOP_ATTEMPTS,
+    STOP_BUDGET,
+    STOP_FAILED,
+    STOP_QUEUE,
+    STOP_QUOTA,
+    STOP_REFILL,
+    ProduceReport,
+    produce_scripts,
+)
 
 app = typer.Typer(help="Shorts Engine CLI - Produksi Video Otomatis")
 
@@ -60,6 +65,19 @@ def _limit_message(exc: Exception) -> str:
             f"{exc.provider})."
         )
     return f"anggaran {exc.scope} habis (Rp{exc.spent_idr:,.0f} dari Rp{exc.limit_idr:,.0f})."
+
+
+def _stop_message(report: ProduceReport) -> str:
+    """Plain-language Indonesian reason why a produce run ended early."""
+    messages = {
+        STOP_BUDGET: "anggaran habis. Jalankan `shorts costs` untuk melihat pemakaian.",
+        STOP_QUOTA: "kuota pencarian bulan ini hampir habis.",
+        STOP_QUEUE: "tidak ada topik baru yang lolos penyaringan.",
+        STOP_ATTEMPTS: "terlalu banyak topik gugur; batas percobaan tercapai.",
+        STOP_FAILED: f"ada pekerjaan yang gagal ({report.stop_detail[:120]}).",
+        STOP_REFILL: f"antrean topik gagal diisi ({report.stop_detail[:120]}).",
+    }
+    return messages.get(report.stopped or "", report.stopped or "")
 
 
 def _open_session(dry_run: bool):
@@ -333,53 +351,31 @@ def produce_command(
     count: int = typer.Option(1, "--count", min=1, help="Jumlah naskah yang ingin diproduksi"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Pakai layanan tiruan, tanpa biaya"),
 ):
-    """Jalankan pipeline dari topik sampai naskah siap rekam."""
+    """Siapkan naskah siap rekam; topik yang gugur otomatis diganti topik berikutnya."""
     db = _open_session(dry_run)
     try:
-        for index in range(count):
-            typer.echo(f"\n--- Memulai Produksi #{index + 1} ---")
-            topic = (
-                db.query(Topic)
-                .filter(Topic.status == STATUS_QUEUED)
-                .order_by(desc(Topic.score))
-                .first()
-            )
-            if not topic:
-                typer.echo(
-                    "Antrean topik kosong. Jalankan `shorts topics --refill` terlebih dahulu."
-                )
-                break
-
-            topic.status = "used"
-            db.commit()
-
-            job_id = f"job_{uuid.uuid4().hex[:8]}"
-            job = Job(
-                id=job_id,
-                topic_id=topic.id,
-                status=JobState.TOPIC_QUEUED.value,
-            )
-            db.add(job)
-            db.commit()
-            typer.echo(f"Topik terpilih: {topic.text} (Job ID: {job_id})")
-
-            try:
-                if run_research(db, job) and run_verify(db, job):
-                    if run_script(db, job):
-                        typer.echo(f"Berhasil. Naskah siap direkam untuk Job {job_id}")
-                    else:
-                        typer.echo(f"Gagal di tahap penulisan naskah. Status: {job.status}")
-                else:
-                    typer.echo(f"Riset/verifikasi tidak lolos. Status: {job.status}")
-            except (BudgetExceeded, SearchQuotaExceeded) as exc:
-                typer.echo(f"Produksi dihentikan: {_limit_message(exc)}", err=True)
-                if release_unstarted_job(db, topic, job, STATUS_QUEUED):
-                    typer.echo("Topik dikembalikan ke antrean.", err=True)
-                else:
-                    typer.echo(f"Pekerjaan {job_id} disimpan di status {job.status}.", err=True)
-                break
+        report = produce_scripts(db, count)
     finally:
         db.close()
+
+    for number, attempt in enumerate(report.attempts, start=1):
+        label = {
+            "ready": "SIAP",
+            "dropped": "dibuang",
+            "failed": "GAGAL",
+            "interrupted": "dihentikan",
+        }[attempt.outcome]
+        detail = f" ({attempt.detail})" if attempt.detail else ""
+        job = f" [{attempt.job_id}]" if attempt.job_id else ""
+        typer.echo(f"{number}. {label}{job} {attempt.topic}{detail}")
+
+    typer.echo(
+        f"\nNaskah siap rekam: {len(report.ready_job_ids)} dari {report.requested}. "
+        f"Biaya sesi ini: Rp{report.cost_idr:,.0f}."
+    )
+    if report.stopped:
+        typer.echo(f"Berhenti: {_stop_message(report)}", err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command(name="process-audio")

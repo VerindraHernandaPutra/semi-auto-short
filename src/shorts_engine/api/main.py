@@ -1,6 +1,5 @@
 import os
 import shutil
-import uuid
 from pathlib import Path
 from typing import Literal
 
@@ -12,20 +11,15 @@ from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from shorts_engine.db.base import SessionLocal
-from shorts_engine.db.models import Job, Topic
+from shorts_engine.db.models import Job
 from shorts_engine.domain.state_machine import JobState, transition_job_state
 from shorts_engine.pipeline.audio import run_audio_alignment
 from shorts_engine.pipeline.footage import run_footage_selection
 from shorts_engine.pipeline.render import run_rendering
-from shorts_engine.pipeline.research import run_research
-from shorts_engine.pipeline.script import run_script
 
 # Import Pipeline
-from shorts_engine.pipeline.topics import STATUS_QUEUED, generate_topics
-from shorts_engine.pipeline.verify import run_verify
 from shorts_engine.providers.factory import set_active_providers
-from shorts_engine.services.costs import BudgetExceeded, SearchQuotaExceeded
-from shorts_engine.services.jobs import release_unstarted_job
+from shorts_engine.services.produce import produce_scripts
 
 app = FastAPI(title="Shorts Engine Web UI", version="2.1")
 
@@ -40,37 +34,10 @@ def get_db():
 
 # --- FUNGSI BACKGROUND TASKS ---
 def background_produce():
-    """Fungsi yang berjalan di belakang layar untuk memproduksi naskah dari awal."""
+    """Produce one script in the background; dropped topics are replaced automatically."""
     db = SessionLocal()
     try:
-        topic = (
-            db.query(Topic)
-            .filter(Topic.status == STATUS_QUEUED)
-            .order_by(desc(Topic.score))
-            .first()
-        )
-        if not topic:
-            # Generate topik baru jika kosong
-            topics = generate_topics(db, count=1)
-            if not topics:
-                return
-            topic = topics[0]
-
-        topic.status = "used"
-        db.commit()
-
-        job_id = f"job_{uuid.uuid4().hex[:8]}"
-        job = Job(id=job_id, topic_id=topic.id, status=JobState.TOPIC_QUEUED.value)
-        db.add(job)
-        db.commit()
-
-        try:
-            if run_research(db, job):
-                if run_verify(db, job):
-                    run_script(db, job)
-        except (BudgetExceeded, SearchQuotaExceeded):
-            # Budget or quota refused the work; an unstarted job goes back to the queue.
-            release_unstarted_job(db, topic, job, STATUS_QUEUED)
+        produce_scripts(db, 1)
     finally:
         db.close()
 
