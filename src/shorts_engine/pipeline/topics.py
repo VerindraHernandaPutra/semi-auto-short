@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from shorts_engine.config import AppConfig, get_config, load_style_guide
 from shorts_engine.db.models import Topic
 from shorts_engine.domain.schemas import TopicCandidate, TopicList, TopicPolicyCheck
+from shorts_engine.pipeline.script_rules import spoken_text
 from shorts_engine.providers.factory import get_footage_provider, get_llm_provider
 from shorts_engine.providers.footage.base import BaseFootageProvider
 from shorts_engine.providers.llm.base import BaseLLMProvider
@@ -242,7 +243,7 @@ def score_topic(
 def _new_topic(candidate: TopicCandidate, status: str, reason: str | None, **extra: Any) -> Topic:
     return Topic(
         id=f"top_{uuid.uuid4().hex[:8]}",
-        text=candidate.text,
+        text=spoken_text(candidate.text),  # pronunciation hints belong in scripts, not topics
         category=candidate.category,
         series=candidate.series,
         status=status,

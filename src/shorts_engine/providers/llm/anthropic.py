@@ -76,7 +76,8 @@ class AnthropicProvider(BaseLLMProvider):
             )
 
         if response.stop_reason in ("refusal", "max_tokens"):
-            raise LLMProviderError(
+            # The service worked and billed the call; this answer is unusable for this input.
+            raise LLMOutputError(
                 PROVIDER_NAME, f"no usable output (stop_reason={response.stop_reason})", model_name
             )
         text = next(

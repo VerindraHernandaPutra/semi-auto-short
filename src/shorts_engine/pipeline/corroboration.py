@@ -11,7 +11,7 @@ from shorts_engine.pipeline.claim_validation import (
     quote_similarity,
 )
 from shorts_engine.pipeline.research import describe_rejections, triage_sources, url_key
-from shorts_engine.providers.llm.base import BaseLLMProvider
+from shorts_engine.providers.llm.base import BaseLLMProvider, LLMOutputError
 from shorts_engine.providers.search.base import BaseSearchProvider
 from shorts_engine.providers.search.tiers import source_independence_domain
 
@@ -24,6 +24,7 @@ NOT_STATED = "not_stated"  # the model says the source does not state the claim
 EMPTY_QUOTE = "empty_quote"  # it said found but gave no quote
 QUOTE_NOT_IN_SOURCE = "quote_not_in_source"  # the quote is not in that source's text
 NUMBER_MISMATCH = "number_mismatch"  # a number or unit of the claim is not in the quote
+UNREADABLE_ANSWER = "unreadable_answer"  # the model answered off-schema; page skipped
 CONFIRMED = "confirmed"
 
 
@@ -115,11 +116,16 @@ def find_corroboration(
             continue
         covered.add(candidate.domain)  # one attempt per domain, successful or not
 
-        answer = llm.generate_structured(
-            build_corroboration_prompt(claim_text, candidate.source_id, candidate.text),
-            CorroborationResult,
-            model,
-        )
+        try:
+            answer = llm.generate_structured(
+                build_corroboration_prompt(claim_text, candidate.source_id, candidate.text),
+                CorroborationResult,
+                model,
+                effort="low",
+            )
+        except LLMOutputError as exc:  # one unreadable answer skips this page, not the topic
+            _record(result, candidate, UNREADABLE_ANSWER, str(exc))
+            continue
         quote = answer.supporting_quote.strip()
         if not answer.found:
             _record(result, candidate, NOT_STATED, answer.reason)
@@ -136,9 +142,13 @@ def find_corroboration(
             _record(result, candidate, NUMBER_MISMATCH, answer.reason, quote, score)
             continue
 
-        check = llm.generate_structured(
-            build_support_prompt(claim_text, quote), ClaimSupportCheck, model
-        )
+        try:
+            check = llm.generate_structured(
+                build_support_prompt(claim_text, quote), ClaimSupportCheck, model, effort="low"
+            )
+        except LLMOutputError as exc:
+            _record(result, candidate, UNREADABLE_ANSWER, str(exc), quote, score)
+            continue
         if check.status != "supports":
             _record(result, candidate, f"support_{check.status}", check.reason, quote, score)
             continue

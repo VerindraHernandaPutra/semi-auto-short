@@ -63,6 +63,8 @@ class ScriptedLLM(BaseLLMProvider):
         self.calls = 0
 
     def generate_structured(self, prompt, schema, model_name, effort=None):
+        if schema.__name__ == "HookRelevance":  # no ranking: candidates keep the old order
+            return schema(ratings=[])
         self.calls += 1
         if self.usage_listener:
             self.usage_listener(LLMUsage("fake", model_name, schema.__name__, 100, 10))

@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from shorts_engine.config import AppConfig, get_config
 from shorts_engine.db.base import get_data_dir
-from shorts_engine.db.models import Job, Topic
+from shorts_engine.db.models import Job, JobEvent, Topic
 from shorts_engine.domain.state_machine import JobState
 from shorts_engine.pipeline.audio import run_audio_alignment
 from shorts_engine.pipeline.footage import run_footage_selection
@@ -41,6 +41,14 @@ class VideoResult:
 class MakeReport:
     scripts: ProduceReport
     videos: list[VideoResult] = field(default_factory=list)
+
+
+def _last_reason(db: Session, job: Job) -> str:
+    """Why the job stopped, as recorded with its last state change (a dropped job has no error)."""
+    event = (
+        db.query(JobEvent).filter(JobEvent.job_id == job.id).order_by(JobEvent.id.desc()).first()
+    )
+    return (event.reason if event and event.reason else "") or "Tahap gagal tanpa keterangan."
 
 
 def _topic_text(db: Session, job: Job) -> str:
@@ -90,7 +98,7 @@ def finish_job(
     for stage in stages:
         if not stage():
             db.refresh(job)
-            return VideoResult(job.id, topic, False, detail=job.error or "Tahap gagal.")
+            return VideoResult(job.id, topic, False, detail=job.error or _last_reason(db, job))
 
     render_dir = get_data_dir() / "jobs" / job.id / "render"
     return VideoResult(

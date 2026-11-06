@@ -382,7 +382,7 @@ def _model_checks(
             f"Statement: {text}\n"
             f"Verified claims:\n{_claim_text_for_ids(claim_ids, claims_by_id)}"
         )
-        check = llm.generate_structured(prompt, ScriptClaimCheck, model)
+        check = llm.generate_structured(prompt, ScriptClaimCheck, model, effort="low")
         checks.append(
             {
                 "statement": text,

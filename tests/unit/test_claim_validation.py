@@ -151,7 +151,9 @@ class VerifiedFakeLLM:
     def __init__(self, candidates):
         self.candidates = candidates
 
-    def generate_structured(self, prompt, schema, model_name):
+    def generate_structured(self, prompt, schema, model_name, effort=None):
+        if schema.__name__ == "HookRelevance":  # no ranking: candidates keep the old order
+            return schema(ratings=[])
         if schema is ExtractedClaims:
             return ExtractedClaims(claims=self.candidates)
         if schema is ClaimSupportCheck:
@@ -348,7 +350,7 @@ class ValidatingFakeLLM:
     def __init__(self, script_data):
         self.script_data = script_data
 
-    def generate_structured(self, prompt, schema, model_name):
+    def generate_structured(self, prompt, schema, model_name, effort=None):
         if schema is ScriptOutput:
             return self.script_data
         if schema is ScriptClaimCheck:

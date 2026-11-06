@@ -24,18 +24,28 @@ def luma_profile(path: Path) -> list[float]:
     return [float(value) for value in _YAVG.findall(result.stdout)]
 
 
-def best_start(profile: list[float], needed_s: float, clip_s: float) -> tuple[float, float]:
+def best_start(
+    profile: list[float],
+    needed_s: float,
+    clip_s: float,
+    avoid: list[tuple[float, float]] | None = None,
+) -> tuple[float, float]:
     """Start (seconds) of the brightest window of ``needed_s`` and that window's mean brightness.
 
     Stock clips often open on a dark frame; a long clip is only used for a few seconds, so the
     brightest stretch is the better one to show. Short or unmeasured clips start at zero.
+    Stretches overlapping ``avoid`` (already shown in this video) are skipped when another fits.
     """
     if not profile or clip_s <= needed_s:
         return 0.0, sum(profile) / len(profile) if profile else 0.0
     window = max(1, math.ceil(needed_s))
     last_start = max(0, min(len(profile) - window, int(clip_s - needed_s)))
+    starts = list(range(last_start + 1))
+    fresh = [
+        s for s in starts if not any(s < end and s + needed_s > begin for begin, end in avoid or [])
+    ]
     best = max(
-        range(last_start + 1),
+        fresh or starts,
         key=lambda s: sum(profile[s : s + window]) / len(profile[s : s + window]),
     )
     chosen = profile[best : best + window]

@@ -326,3 +326,104 @@ def test_thumbnails_come_only_from_allowed_https_hosts():
     assert fetch_thumbnail("", HOSTS, transport) is None
     huge = httpx.MockTransport(lambda request: httpx.Response(200, content=b"x" * 4_000_000))
     assert fetch_thumbnail("https://cdn.example/a.jpg", HOSTS, huge) is None
+
+
+def test_a_shot_with_no_fitting_clip_falls_back_to_the_topics_subject():
+    mars, mars_url, _ = candidate_with_preview("mars", ["mars", "planet", "space"], b"x")
+    provider = FakeProvider({"olympus mons": [mars]})
+
+    class PromptScorer(FakeScorer):
+        """Mars footage fits "Olympus Mons on Mars" but not "an aerial view of a crater"."""
+
+        def match_probabilities(self, positive, negatives, images):
+            self.prompts.append((positive, negatives))
+            return [0.9 if "olympus" in positive else 0.05 for _ in images]
+
+    scorer = PromptScorer()
+    [pick] = pick_footage(
+        provider,
+        [Shot(0, "aerial view of a volcanic crater", 8.0)],
+        "Why Olympus Mons on Mars is the tallest volcano",
+        {"clip": {"weak_probability": 0.2}, "fallback_queries": []},
+        scorer=scorer,
+        fetch=thumbs({mars_url: b"x"}),
+        subject_queries=["olympus mons"],
+    )
+
+    assert pick.candidate.asset_id == "mars" and pick.fallback == "subject"
+    assert (
+        scorer.prompts[-1][0] == "a photo of olympus mons mars tallest"
+    )  # judged against the subject
+
+
+def test_question_words_never_become_a_footage_query():
+    assert query_attempts("", "Why Olympus Mons is tall", [])[0] == "olympus mons"
+
+
+def test_when_nothing_fits_at_all_the_best_chosen_clip_is_reused_instead_of_dropping_the_topic():
+    good, good_url, _ = candidate_with_preview("good", ["saturn", "space"], b"0.95")
+    provider = FakeProvider({"saturn rings": [good]})
+
+    picks = pick_footage(
+        provider,
+        [Shot(0, "saturn rings", 6.0), Shot(1, "an abstract chart of numbers", 6.0)],
+        "Saturn",
+        {"clip": {"weak_probability": 0.2}, "fallback_queries": []},
+        scorer=FakeScorer(),
+        fetch=thumbs({good_url: b"0.95"}),
+        subject_queries=["saturn rings"],
+    )
+
+    assert [p.candidate.asset_id for p in picks] == ["good", "good"]
+    assert [p.fallback for p in picks] == ["", "reused"]
+
+
+def test_a_reused_clip_is_shown_from_another_stretch():
+    from shorts_engine.pipeline.shot_look import best_start
+
+    profile = [90, 90, 90, 10, 10, 10, 80, 80, 80, 10]
+    first, _ = best_start(profile, 3.0, 10.0)
+    second, _ = best_start(profile, 3.0, 10.0, avoid=[(first, first + 3.0)])
+
+    assert first == 0.0 and second == 6.0
+
+
+def test_a_weak_match_for_the_sentence_gives_way_to_a_clear_clip_of_the_subject():
+    nebula, nebula_url, _ = candidate_with_preview("nebula", ["nebula", "space"], b"x")
+    mars, mars_url, _ = candidate_with_preview("mars", ["mars", "planet", "space"], b"x")
+    provider = FakeProvider({"lava flowing": [nebula], "mars": [mars]})
+
+    class PromptScorer(FakeScorer):
+        def match_probabilities(self, positive, negatives, images):
+            self.prompts.append((positive, negatives))
+            return [0.4 if "lava" in positive else 0.9 for _ in images]
+
+    [pick] = pick_footage(
+        provider,
+        [Shot(0, "lava flowing", 6.0)],
+        "Why Mars has giant volcanoes",
+        {"clip": {"weak_probability": 0.2, "good_probability": 0.5}, "fallback_queries": []},
+        scorer=PromptScorer(),
+        fetch=thumbs({nebula_url: b"x", mars_url: b"x"}),
+        subject_queries=["mars"],
+    )
+
+    assert pick.candidate.asset_id == "mars" and pick.fallback == "subject"
+
+
+def test_a_good_match_for_the_sentence_is_kept_over_the_subject():
+    lava, lava_url, _ = candidate_with_preview("lava", ["lava", "space"], b"x")
+    mars, mars_url, _ = candidate_with_preview("mars", ["mars", "space"], b"x")
+    provider = FakeProvider({"lava flowing": [lava], "mars": [mars]})
+
+    [pick] = pick_footage(
+        provider,
+        [Shot(0, "lava flowing", 6.0)],
+        "Why Mars has giant volcanoes",
+        {"clip": {"weak_probability": 0.2, "good_probability": 0.5}, "fallback_queries": []},
+        scorer=FakeScorer(),
+        fetch=thumbs({lava_url: b"0.8", mars_url: b"0.9"}),
+        subject_queries=["mars"],
+    )
+
+    assert pick.candidate.asset_id == "lava" and pick.fallback == ""

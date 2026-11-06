@@ -140,3 +140,22 @@ def test_without_a_voice_only_the_scripts_are_made(db_session, monkeypatch):
     result = make_videos(db_session, 1, clone=False, config=get_config())
 
     assert result.videos == [] and result.scripts.ready_job_ids == ["job_a"]
+
+
+def test_a_dropped_video_reports_why_it_was_dropped(db_session, monkeypatch, tmp_path):
+    from shorts_engine.domain.state_machine import transition_job_state
+
+    stub_stages(monkeypatch)
+
+    def footage_drops(db, job, *args, **kwargs):
+        transition_job_state(db, job, JobState.ALIGNING, reason="x")
+        transition_job_state(db, job, JobState.SELECTING_FOOTAGE, reason="x")
+        transition_job_state(db, job, JobState.DROPPED, reason="no_footage_for_segments:5")
+        return False
+
+    monkeypatch.setattr(make_module, "run_footage_selection", footage_drops)
+    job = db_session.get(Job, "job_a")
+
+    result = finish_job(db_session, job, audio_path=tmp_path / "v.wav", config=get_config())
+
+    assert not result.ok and result.detail == "no_footage_for_segments:5"

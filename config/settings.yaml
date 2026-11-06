@@ -74,6 +74,7 @@ footage:
     enabled: true  # judge clips by their picture (CLIP model, ~150 MB downloaded once), not by tags
     candidates_per_shot: 16
     weak_probability: 0.2  # below this nothing is used for the shot
+    good_probability: 0.5  # below this a clip of the topic's subject is preferred when one fits well
     # Things a clip must not be; a clip is picked when the shot's description beats all of these.
     negatives:
       - a cartoon or fantasy science fiction illustration
@@ -82,11 +83,14 @@ footage:
       - a city or buildings seen from the air
       - a person
       - an abstract digital network
+      - astronauts or people in a science fiction scene
+      - an abstract visual effect or explosion graphic
+      - a human base or colony on another planet
   # A clip must carry at least one of these tags (the channel's field), whatever else it matches.
   required_tags_any: [space, stars, galaxy, universe, astronomy, planet, telescope, nebula, jupiter, mars, moon, sun, comet, asteroid, observatory]
   # Tags that mark fiction. Pixabay tags are written by uploaders and can mislead, so a clip
   # with any of these words is not used for a fact video.
-  avoid_tags: [fantasy, fiction, alien, ufo, spaceship, cartoon, anime, magic, dragon, christmas, globe, world, global, international, network, technology, internet, digital, hologram, city, asteroid, meteorite, land]
+  avoid_tags: [fantasy, fiction, alien, ufo, spaceship, cartoon, anime, magic, dragon, christmas, globe, world, global, international, network, technology, internet, digital, hologram, city, asteroid, meteorite, land, astronaut, astronauts, colony, colonization, habitat, settlement]
 
 description:
   visuals_note: "Visuals are illustrative stock footage, not mission imagery."

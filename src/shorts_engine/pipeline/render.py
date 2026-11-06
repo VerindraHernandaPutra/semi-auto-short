@@ -105,7 +105,13 @@ def _ffmpeg(job_id: str, args: list[str], cwd: Path, timeout: int, log: Path) ->
         raise RenderError(job_id, "Pembuatan video gagal (detail di render/ffmpeg_error.log).")
 
 
-def render_shot(job_id: str, job_dir: Path, shot: dict, config: AppConfig) -> tuple[str, dict]:
+def render_shot(
+    job_id: str,
+    job_dir: Path,
+    shot: dict,
+    config: AppConfig,
+    avoid: list[tuple[float, float]] | None = None,
+) -> tuple[str, dict]:
     """One 9:16 clip of exactly ``needed_s`` seconds; returns its file and how it was looked after.
 
     A long clip starts at its brightest stretch, a dark one is lifted with gamma, a short one
@@ -116,7 +122,7 @@ def render_shot(job_id: str, job_dir: Path, shot: dict, config: AppConfig) -> tu
     needed = float(shot["needed_s"])
     looped = bool(shot.get("loop"))
     profile = luma_profile(job_dir / shot["file"])
-    start, mean = best_start(profile, needed, float(shot.get("clip_s", needed)))
+    start, mean = best_start(profile, needed, float(shot.get("clip_s", needed)), avoid)
     if looped:
         start = 0.0
     gamma = gamma_for(
@@ -163,6 +169,7 @@ def render_video(job_id: str, job_dir: Path, config: AppConfig) -> Path:
     total = output_length(duration, config)
     tail = total - duration
     rendered = []
+    shown: dict[str, list[tuple[float, float]]] = {}  # stretches of each clip already used
     for position, shot in enumerate(plan):
         # each shot but the last is longer by the overlap its transition uses; the last one
         # carries the quiet ending after the voice has finished
@@ -170,7 +177,10 @@ def render_video(job_id: str, job_dir: Path, config: AppConfig) -> Path:
         needed = float(shot["needed_s"]) + extra
         longer = {**shot, "needed_s": needed}
         longer["loop"] = bool(shot.get("loop")) or float(shot.get("clip_s", needed)) < needed
-        rendered.append(render_shot(job_id, job_dir, longer, config))
+        asset = str(shot.get("asset_id") or shot["file"])
+        name, info = render_shot(job_id, job_dir, longer, config, shown.get(asset, []))
+        shown.setdefault(asset, []).append((info["start_s"], info["start_s"] + needed))
+        rendered.append((name, info))
     shots = [name for name, _ in rendered]
     (render_dir / "look.json").write_text(
         json.dumps([info for _, info in rendered], indent=2), encoding="utf-8"

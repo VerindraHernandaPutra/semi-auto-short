@@ -32,7 +32,8 @@ TAIL_S = 0.3
 THUMBNAIL_MAX_BYTES = 3 * 1024 * 1024
 FILLER_WORDS = frozenset(
     "a an and at by for from in into is it its of on or over seen the through to up with "
-    "close slow slowly view shot shots footage video clip image showing shows".split()
+    "close slow slowly view shot shots footage video clip image showing shows "
+    "why how what when where which who does do did are was were has have".split()
 )
 
 
@@ -54,6 +55,7 @@ class Pick:
     score: float
     loop: bool  # the clip is shorter than the shot and has to repeat
     clip_probability: float | None = None  # how well the picture matches the shot (CLIP)
+    fallback: str = ""  # "subject" or "reused" when the shot's own description found nothing
 
 
 def content_words(text: str) -> list[str]:
@@ -130,6 +132,11 @@ def fetch_thumbnail(
     return response.content
 
 
+def subject_words(topic_text: str, limit: int = 4) -> str:
+    """The topic's subject as plain words ("olympus mons mars tallest"), without question words."""
+    return " ".join(content_words(topic_text)[:limit])
+
+
 def pick_footage(
     provider: BaseFootageProvider,
     shots: list[Shot],
@@ -137,12 +144,20 @@ def pick_footage(
     settings: dict,
     scorer: ClipScorer | None = None,
     fetch: Callable[[str], bytes | None] | None = None,
+    subject_queries: list[str] | None = None,
 ) -> list[Pick | None]:
-    """Best clip per shot, never the same clip twice. A shot without a clip is None.
+    """Best clip per shot; a shot without any clip at all is None.
 
-    With a ``scorer`` the candidates are judged by their picture (CLIP) against what the shot
-    asks for and against things it must not be; tags only narrow the field. Without one, or if
-    the model fails, tags alone decide.
+    Three levels, so a paid script is not lost to one unfilmable sentence:
+    1. clips for what the shot itself describes;
+    2. if none fits, or the best one is only a weak match (below ``clip.good_probability``),
+       clips of the topic's subject (the footage queries checked when the topic was queued, else
+       the topic's own words), judged against that subject and used when they clearly fit;
+    3. if still none, the best clip already chosen for another shot is used again (the render
+       then takes a different stretch of it).
+    With a ``scorer`` the candidates are judged by their picture (CLIP) against the description
+    and against things they must not be; tags only narrow the field. Without one, or if the
+    model fails, tags alone decide.
     """
     min_clip = float(settings.get("min_clip_seconds", 5))
     max_bytes = int(settings.get("max_clip_mb", 60)) * 1024 * 1024
@@ -152,14 +167,20 @@ def pick_footage(
     clip = settings.get("clip", {})
     pool_size = int(clip.get("candidates_per_shot", 16))
     weakest = float(clip.get("weak_probability", 0.2))
+    good = float(clip.get("good_probability", 0.5))
     negatives = list(clip.get("negatives", []))
+    subject = subject_words(topic_text)
+    subject_searches = [q for q in (subject_queries or []) if q] or [
+        subject_words(topic_text, 2),
+        subject_words(topic_text, 3),
+    ]
     used: set[str] = set()
-    picks: list[Pick | None] = []
-    for shot in shots:
-        wanted = set(content_words(shot.visual)) | set(content_words(topic_text))
+
+    def search(shot: Shot, queries: list[str], description: str) -> Pick | None:
+        wanted = set(content_words(description)) | set(content_words(topic_text))
         pool: dict[str, tuple[FootageCandidate, float, str]] = {}
         best: Pick | None = None
-        for query in query_attempts(shot.visual, topic_text, fallbacks):
+        for query in dict.fromkeys(q for q in queries if q):
             for cand in provider.search_videos(query, per_page=CANDIDATES_PER_QUERY):
                 key = f"{cand.provider}:{cand.asset_id}"
                 if key in used or key in pool or cand.duration_s < min_clip:
@@ -179,12 +200,44 @@ def pick_footage(
                 break
         if scorer is not None and pool:
             seen = sorted(pool.values(), key=lambda item: -item[1])[:pool_size]
-            could_judge, chosen = _judge_by_picture(scorer, fetch, shot, seen, negatives, weakest)
+            could_judge, chosen = _judge_by_picture(
+                scorer, fetch, shot, seen, negatives, weakest, description
+            )
             if could_judge:
                 best = chosen  # None when every picture was a poor match: no clip beats a wrong one
+        return best
+
+    picks: list[Pick | None] = []
+    for shot in shots:
+        best = search(shot, query_attempts(shot.visual, topic_text, fallbacks), shot.visual)
+        weak = best is None or (best.clip_probability is not None and best.clip_probability < good)
+        if weak and subject:
+            # A clearly on-topic clip of the subject beats a weak match for the sentence (a red
+            # nebula for "lava on Mars"); with tags only, the subject is a last resort.
+            alternative = search(shot, subject_searches, subject)
+            if alternative is not None and (
+                best is None or (alternative.clip_probability or 0.0) >= good
+            ):
+                alternative.fallback = "subject"
+                best = alternative
         if best is not None:
             used.add(f"{best.candidate.provider}:{best.candidate.asset_id}")
         picks.append(best)
+
+    chosen = [pick for pick in picks if pick is not None]
+    if chosen and len(chosen) < len(picks):
+        donor = max(chosen, key=lambda pick: (pick.clip_probability or 0.0, pick.score))
+        for index, pick in enumerate(picks):
+            if pick is None:
+                needed = shots[index].needed_s
+                picks[index] = Pick(
+                    donor.candidate,
+                    donor.query,
+                    donor.score,
+                    donor.candidate.duration_s < needed,
+                    donor.clip_probability,
+                    fallback="reused",
+                )
     return picks
 
 
@@ -195,6 +248,7 @@ def _judge_by_picture(
     candidates: list[tuple[FootageCandidate, float, str]],
     negatives: list[str],
     weakest: float,
+    description: str | None = None,
 ) -> tuple[bool, Pick | None]:
     """(could judge, best match). The match is None when every preview fits the shot poorly."""
     images, kept = [], []
@@ -205,8 +259,9 @@ def _judge_by_picture(
             kept.append((cand, query))
     if not images:
         return False, None
+    prompt = f"a photo of {description or shot.visual}"
     try:
-        probabilities = scorer.match_probabilities(f"a photo of {shot.visual}", negatives, images)
+        probabilities = scorer.match_probabilities(prompt, negatives, images)
     except ClipError as exc:
         logger.warning("picture ranking skipped: %s", exc)
         return False, None
@@ -310,6 +365,7 @@ def run_footage_selection(
             settings,
             scorer=scorer,
             fetch=lambda url: fetch_thumbnail(url, hosts_for_pictures, transport),
+            subject_queries=list((topic.footage_check or {}).get("queries") or []),
         )
     except FootageProviderError as exc:
         transition_job_state(db, job, JobState.FAILED, reason=f"Pencarian footage gagal: {exc}")
@@ -348,6 +404,7 @@ def run_footage_selection(
                     "query": pick.query,
                     "score": pick.score,
                     "clip_probability": pick.clip_probability,
+                    "fallback": pick.fallback,
                     "provider": cand.provider,
                     "asset_id": cand.asset_id,
                     "page_url": cand.page_url,

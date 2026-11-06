@@ -249,6 +249,14 @@ def run_quality_checks(
             "Semua footage cocok dengan isi kalimatnya.",
             f"Footage shot {', '.join(map(str, weak))} kurang cocok dengan kalimatnya." if weak
             else "Kecocokan footage tidak bisa dinilai.")  # fmt: skip
+        reused = [p["shot"] for p in plan if p.get("fallback") == "reused"]
+        add(
+            "footage berulang",
+            not reused,
+            "Setiap shot punya footage sendiri.",
+            f"Shot {', '.join(map(str, reused))} memakai ulang footage shot lain (bagian berbeda), "
+            "karena tidak ada klip yang cocok.",
+        )
     duration = float(report.get("duration_s", 0))
     add("durasi", 20 <= duration <= 59, f"Durasi {duration:.0f} detik, cocok untuk Shorts.",
         f"Durasi {duration:.0f} detik di luar 20-59 detik.")  # fmt: skip

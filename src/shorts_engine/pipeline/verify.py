@@ -13,10 +13,12 @@ from shorts_engine.domain.schemas import (
     ClaimCandidate,
     ClaimSupportCheck,
     ExtractedClaims,
+    HookRelevance,
 )
 from shorts_engine.domain.state_machine import JobState, transition_job_state
 from shorts_engine.pipeline.claim_validation import (
     build_extraction_prompt,
+    build_hook_relevance_prompt,
     build_support_prompt,
     claim_key,
     claim_overlap,
@@ -93,6 +95,31 @@ def run_verify(
         check_search_quota(db, config, needed=searches * credits_per_search(config))
     with track_costs(db, config, job.id, llm=llm, search=search):
         return _verify(db, job, llm, search, config)
+
+
+def rate_hook_relevance(
+    llm: BaseLLMProvider, model: str, topic_text: str, groups: dict[str, list]
+) -> dict[str, int]:
+    """Relevance (1-10) of each distinct verified claim to the topic; empty if it cannot be rated.
+
+    Only the order in which hook candidates are tried depends on it; every candidate still has
+    to pass the two-domain rule. An unreadable answer simply leaves the old order.
+    """
+    keys = list(groups)
+    if len(keys) < 2 or not topic_text:
+        return {}
+    prompt = build_hook_relevance_prompt(
+        topic_text, [groups[key][0].candidate.text for key in keys]
+    )
+    try:
+        rated = llm.generate_structured(prompt, HookRelevance, model, effort="low")
+    except LLMOutputError:
+        return {}
+    return {
+        keys[item.index]: max(1, min(10, item.relevance))
+        for item in rated.ratings
+        if 0 <= item.index < len(keys)
+    }
 
 
 def _write_verification_log(job_dir: Path, log: list[dict]) -> None:
@@ -193,7 +220,9 @@ def _verify(
 
         prompt_check = build_support_prompt(candidate.text, candidate.supporting_quote)
         try:
-            check_result = llm.generate_structured(prompt_check, ClaimSupportCheck, model_light)
+            check_result = llm.generate_structured(
+                prompt_check, ClaimSupportCheck, model_light, effort="low"
+            )
         except LLMOutputError:
             # One unreadable check rejects that claim only; the others still count.
             assessment.reject_reason = "support_check_invalid_output"
@@ -310,50 +339,51 @@ def _verify(
     verified_hook_keys: set[str] = set()
     tried = 0
     try:
-        # 1. The claim the model flagged as the hook. If it cannot stand on two domains it is
-        #    rejected, as before: the model's most striking claim was not well supported.
-        flagged = group_by_claim([a for a in assessments if a.candidate.is_hook and a.verified])
-        for key, group in flagged.items():
+        # Every verified claim may become the hook if it passes the two-domain rule. They are
+        # tried in order of relevance to the topic (a cheap rating call), then the claim the
+        # extraction flagged, then how many other sources seem to state it. A flagged claim that
+        # cannot stand on two domains is rejected, as before; any other one that fails stays an
+        # ordinary single-source claim, which the spec allows.
+        groups = group_by_claim([a for a in assessments if a.verified])
+        flagged_keys = {
+            key for key, group in groups.items() if any(a.candidate.is_hook for a in group)
+        }
+
+        def shared_by(group: list[CandidateAssessment]) -> int:
+            """Independent domains, besides the claim's own, whose text seems to state it."""
+            own = {independence_domain(a.source) for a in group if a.source is not None}
+            return len(
+                {
+                    page.domain
+                    for page in corroboration_pool
+                    if page.domain not in own and claim_overlap(group[0].candidate.text, page.text)
+                }
+            )
+
+        relevance = rate_hook_relevance(llm, model_light, topic.text if topic else "", groups)
+        ranked = sorted(
+            groups.items(),
+            key=lambda item: (
+                -relevance.get(item[0], 0),
+                item[0] not in flagged_keys,
+                -shared_by(item[1]),
+            ),
+        )
+        for key, group in ranked:
             if tried >= max_hook_candidates:
                 break
             tried += 1
-            if two_domains_confirmed(group):
+            confirmed = two_domains_confirmed(group)
+            hook_log[-1]["relevance"] = relevance.get(key)
+            if confirmed:
                 verified_hook_keys.add(key)
                 for assessment in group:
                     assessment.hook_ok = True
                 break
-            for assessment in group:
-                assessment.verified = False
-                assessment.reject_reason = "hook_requires_two_independent_domains"
-
-        # 2. The model cannot know which claim several sources share. Any other verified claim
-        #    may be the hook if it passes the very same two-domain rule; one that fails simply
-        #    stays an ordinary single-source claim, which the spec allows.
-        if not verified_hook_keys:
-            others = group_by_claim([a for a in assessments if a.verified and not a.hook_ok])
-
-            def shared_by(group: list[CandidateAssessment]) -> int:
-                """Independent domains, besides the claim's own, whose text seems to state it."""
-                own = {independence_domain(a.source) for a in group if a.source is not None}
-                return len(
-                    {
-                        page.domain
-                        for page in corroboration_pool
-                        if page.domain not in own
-                        and claim_overlap(group[0].candidate.text, page.text)
-                    }
-                )
-
-            ranked = sorted(others.items(), key=lambda item: -shared_by(item[1]))
-            for key, group in ranked:
-                if tried >= max_hook_candidates:
-                    break
-                tried += 1
-                if two_domains_confirmed(group):
-                    verified_hook_keys.add(key)
-                    for assessment in group:
-                        assessment.hook_ok = True
-                    break
+            if key in flagged_keys:
+                for assessment in group:
+                    assessment.verified = False
+                    assessment.reject_reason = "hook_requires_two_independent_domains"
     except LLMProviderError as exc:
         _write_verification_log(get_data_dir() / "jobs" / job.id / "research", hook_log)
         end_on_llm_error(db, job, exc, "hook corroboration")

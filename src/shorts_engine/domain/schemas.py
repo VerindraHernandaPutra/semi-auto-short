@@ -120,6 +120,21 @@ class ClaimSupportCheck(BaseModel):
     reason: str = Field(..., description="Brief reason")
 
 
+class ClaimRelevance(BaseModel):
+    index: int = Field(..., description="Index of the fact in the list")
+    relevance: int = Field(
+        ...,
+        description=(
+            "How directly the fact answers the topic as the opening line of a video about it, "
+            "from 1 (a side detail) to 10 (states the core of the topic itself)"
+        ),
+    )
+
+
+class HookRelevance(BaseModel):
+    ratings: list[ClaimRelevance]
+
+
 class CorroborationResult(BaseModel):
     found: bool = Field(..., description="Whether the source text explicitly states the claim")
     supporting_quote: str = Field(

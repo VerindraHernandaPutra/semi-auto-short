@@ -48,6 +48,8 @@ class ScriptedLLM(BaseLLMProvider):
         self.support_calls = 0
 
     def generate_structured(self, prompt, schema, model_name, effort=None):
+        if schema.__name__ == "HookRelevance":  # no ranking: candidates keep the old order
+            return schema(ratings=[])
         if schema is ExtractedClaims:
             return ExtractedClaims(claims=self.candidates)
         if schema is CorroborationResult:
@@ -401,3 +403,109 @@ def test_a_script_cannot_open_with_a_claim_that_was_not_confirmed_by_two_sources
 
 def test_a_script_may_open_with_a_confirmed_hook_claim():
     assert _validate_references(hook_script(["claim_1"]), {"claim_1": make_claim(True)}) is None
+
+
+class RankingLLM(ScriptedLLM):
+    """ScriptedLLM that also rates hook relevance, by claim text."""
+
+    def __init__(self, *args, relevance=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.relevance = relevance or {}
+
+    def generate_structured(self, prompt, schema, model_name, effort=None):
+        if schema.__name__ == "HookRelevance":
+            from shorts_engine.domain.schemas import ClaimRelevance
+
+            listed = re.findall(r"^\[(\d+)\] (.*)$", prompt, flags=re.MULTILINE)
+            return schema(
+                ratings=[
+                    ClaimRelevance(index=int(i), relevance=self.relevance.get(text, 1))
+                    for i, text in listed
+                ]
+            )
+        return super().generate_structured(prompt, schema, model_name, effort)
+
+
+def test_a_less_relevant_pick_of_the_model_waits_behind_a_more_relevant_claim(db_session, tmp_path):
+    text_a = (
+        f"{CLAIM} Muscles expand the cells in octopus skin. "
+        "Chromatophores are pigment cells in octopus skin. The pigment cells sit just under the surface."
+    )
+    job = setup_job(
+        db_session, tmp_path, {"source_a": ("nature.com", text_a), "source_b": ("noaa.gov", TEXT_B)}
+    )
+    muscles = "Muscles expand the cells."
+    candidates = [
+        candidate(CLAIM, "source_a", hook=True),
+        candidate(muscles, "source_a", quote="Muscles expand the cells"),
+        candidate("Chromatophores are pigment cells in octopus skin.", "source_a"),
+        candidate("The pigment cells sit just under the surface.", "source_a"),
+    ]
+    llm = RankingLLM(
+        candidates,
+        found_by_claim={
+            CLAIM: {"source_b": QUOTE_B},
+            muscles: {"source_b": "Muscles expand the cells"},
+        },
+        relevance={CLAIM: 3, muscles: 9},
+    )
+
+    assert verify(db_session, job, llm) is True
+
+    hook = db_session.query(Claim).filter(Claim.is_hook.is_(True)).one()
+    assert hook.text == muscles  # more relevant to the topic, tried and confirmed first
+    pick = db_session.query(Claim).filter(Claim.text == CLAIM).one()
+    assert pick.status == "verified" and pick.is_hook is False  # never tried, stays ordinary
+
+
+def test_relevance_ratings_are_clamped_and_unreadable_ratings_keep_the_old_order():
+    from shorts_engine.domain.schemas import ClaimRelevance, HookRelevance
+    from shorts_engine.pipeline.verify import rate_hook_relevance
+    from shorts_engine.providers.llm.base import LLMOutputError
+
+    class Group:
+        def __init__(self, text):
+            self.candidate = type("C", (), {"text": text})()
+
+    groups = {"a": [Group("fact a")], "b": [Group("fact b")]}
+
+    class Rater:
+        def __init__(self, result=None, error=None):
+            self.result, self.error = result, error
+
+        def generate_structured(self, prompt, schema, model_name, effort=None):
+            if self.error:
+                raise self.error
+            return self.result
+
+    rated = HookRelevance(
+        ratings=[
+            ClaimRelevance(index=0, relevance=15),
+            ClaimRelevance(index=1, relevance=-3),
+            ClaimRelevance(index=7, relevance=5),
+        ]
+    )
+    assert rate_hook_relevance(Rater(rated), "m", "topic", groups) == {"a": 10, "b": 1}
+    assert rate_hook_relevance(Rater(error=LLMOutputError("x", "bad")), "m", "topic", groups) == {}
+    assert (
+        rate_hook_relevance(Rater(rated), "m", "topic", {"a": groups["a"]}) == {}
+    )  # one claim: nothing to rank
+
+
+def test_an_unreadable_answer_about_one_page_skips_that_page_only():
+    from shorts_engine.providers.llm.base import LLMOutputError
+
+    pool = sources(("noaa.gov", TEXT_B), ("nasa.gov", TEXT_B))
+
+    class OneUnreadable(ScriptedLLM):
+        def generate_structured(self, prompt, schema, model_name, effort=None):
+            if schema is CorroborationResult and "--- Source s_noaa.gov ---" in prompt:
+                self.corroboration_calls.append("s_noaa.gov")
+                raise LLMOutputError("fake", "no usable output (stop_reason=max_tokens)")
+            return super().generate_structured(prompt, schema, model_name, effort)
+
+    llm = OneUnreadable(found={"s_nasa.gov": QUOTE_B})
+    result = find_corroboration(CLAIM, {"nature.com"}, pool, llm, "m", 0.92, 1)
+
+    assert [e.domain for e in result.evidence] == ["nasa.gov"]
+    assert "unreadable_answer" in [a.outcome for a in result.attempts]
